@@ -9,7 +9,8 @@ You should only need to :
 2. extract the ext/lwip-1.4.1_patched.7z file
 3. Make sure that the path to Chibios is correct in the Makefile - Mine is ../../ChibiOS-RT
 4. make
-5. ./load.sh (this assumes that you have opeocd installed as well as a usb port hooked up to your STM32F429-DISCOVERY)
+5. ./load.sh (this assumes that you have opeocd installed as well as a usb port hooked up to your STM32F429-DISCOVERY - yes this will remove the software that came with the device. I didn't back it up so I don't know how to do that off the top of my head. - be careful if you want to keep it)
+
 
 I am also going with the understanding that you have all the gcc-arm-eabi stuff installed for building as well
 
