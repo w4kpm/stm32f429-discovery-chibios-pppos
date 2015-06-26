@@ -16,4 +16,11 @@ I am also going with the understanding that you have all the gcc-arm-eabi stuff 
 Under UBUNTU I think that the buildessential package and the gcc-arm-none-eabi packages will get you fixed up - 
 but don't hold me to it.
 
+Oh yes, . . . 
+
+The main PPP serial link is SD1 connected to PB6 and PB7 - the other serial link that I used for some debugging is SD3 connected to PB10 and PB11 - both are at 460800 for the time being and seem to work well there.
+
+
+
+
 Finally - you need to set up pppd according to the instructions here http://www.dalbert.net/?m=201503
