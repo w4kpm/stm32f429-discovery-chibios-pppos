@@ -1,0 +1,27 @@
+# Prevent pppd from forking into the background
+-detach
+debug
+/dev/ttyUSB1
+460800
+# wait for connection if none initially found
+passive
+# no hardware flow control
+nocrtscts
+proxyarp
+# don’t use modem control lines
+local
+# create a default route for this connection in the routing table
+defaultroute
+# no authorization required
+noauth
+# ensure exclusive access to the serial device
+lock
+# do not set up any escaped control sequences
+asyncmap 0
+# use a maximum transmission packet size of 552 bytes
+#mtu 552
+# use a maximum receive packet size of 552 bytes
+#mru 552
+# IP stack configuration
+netmask 255.255.255.0
+noipdefault
