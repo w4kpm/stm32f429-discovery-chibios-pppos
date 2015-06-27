@@ -180,15 +180,15 @@
  * To use this, MEMP_USE_CUSTOM_POOLS also has to be enabled.
  */
 #ifndef MEM_USE_POOLS
-#define MEM_USE_POOLS                   0
+#define MEM_USE_POOLS                   1
 #endif
-
+#define MEMP_USE_CUSTOM_POOLS 1
 /**
  * MEM_USE_POOLS_TRY_BIGGER_POOL==1: if one malloc-pool is empty, try the next
  * bigger pool - WARNING: THIS MIGHT WASTE MEMORY but it can make a system more
  * reliable. */
 #ifndef MEM_USE_POOLS_TRY_BIGGER_POOL
-#define MEM_USE_POOLS_TRY_BIGGER_POOL   0
+#define MEM_USE_POOLS_TRY_BIGGER_POOL   1
 #endif
 
 /**
@@ -494,7 +494,7 @@
  * on a 32-bit boundary, so setting this to 2 can speed up 32-bit-platforms.
  */
 #ifndef ETH_PAD_SIZE
-#define ETH_PAD_SIZE                    0
+#define ETH_PAD_SIZE                    2
 #endif
 
 /** ETHARP_SUPPORT_STATIC_ENTRIES==1: enable code to support static ARP table
@@ -1849,7 +1849,7 @@
  * application buffers to pbufs.
  */
 #ifndef LWIP_CHECKSUM_ON_COPY
-#define LWIP_CHECKSUM_ON_COPY           0
+#define LWIP_CHECKSUM_ON_COPY           1
 #endif
 
 /*
