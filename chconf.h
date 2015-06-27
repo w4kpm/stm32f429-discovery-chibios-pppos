@@ -32,7 +32,7 @@
 #define STDIN_SD SD3
 
 
-
+#define STM32F429xx
 /*===========================================================================*/
 /**
  * @name System timers settings
