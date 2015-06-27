@@ -32,10 +32,66 @@
 #include <string.h>
 #include "ppp/ppp.h"
 #include "stm32f4xx.h"
+
 //#include "lwipthread.h"
+static uint8_t txbuf[2];
+static uint8_t rxbuf[2];
+static char text[255];
+
+static const SPIConfig std_spicfg1 = {
+  NULL,
+  GPIOC,                                                        /*port of CS  */
+  2,                                                /*pin of CS   */
+  SPI_CR1_CPOL|SPI_CR1_CPHA| \
+  SPI_CR1_SPE|SPI_CR1_MSTR|SPI_CR1_BIDIMODE ,
+  NULL
+};
+
+/*
+The interface to the LCD controller appears to be bidirectional - and you have to do some stuff to set it up before it will take parallel info from the lcd controller from STM32 - it may be best to work on connecting to VNC server and speed issues before messing with the screwy SPI stuff with this display.
+*/
+
+
+void init_spi()
+{
+//  palSetPadMode(GPIOA, CS, PAL_MODE_OUTPUT_PUSHPULL);
+    // palSetPadMode(GPIOA, CS2, PAL_MODE_OUTPUT_PUSHPULL);
+    // palSetPadMode(GPIOB, CK, PAL_MODE_OUTPUT_PUSHPULL);
+    // palSetPadMode(GPIOB, MISO, PAL_MODE_INPUT_PULLDOWN);
+    //palSetPadMode(GPIOB, MOSI, PAL_MODE_OUTPUT_PUSHPULL);
+    //palSetPad(GPIOA,CS);
+    //palSetPad(GPIOA,CS2);
+    // palClearPad(GPIOB,CK);
+
+}
+uint8_t spi_read(device,location)
+{
+  spiStart(&SPID5,device);
+  spiSelect(&SPID5);
+  txbuf[0] = 0x80 | location;
+  spiSend(&SPID5,1,&txbuf);
+  spiReceive(&SPID5,1,&rxbuf);
+  spiUnselect(&SPID5);
+  spiStop(&SPID5);
+  return(rxbuf[0]);
+}
+void spi_write(device,location,data)
+{
+  spiStart(&SPID5,device);
+  spiSelect(&SPID5);
+  txbuf[0] = 0x00 | location;
+  txbuf[1] = data;
+  spiSend(&SPID5,2,&txbuf);
+  spiUnselect(&SPID5);
+  spiStop(&SPID5);
+}
+
+
+
+
 
 mutex_t SD3mtx;
-
+void TFTLCD_Init(void);
 /* stolen from a version of sys_arch I found on wizhippo's github 
 
 https://github.com/wizhippo/stm32f4-chibios-lwip-pppos.git
@@ -56,8 +112,23 @@ u32_t sys_jiffies(void) {
 }
 
 
+#define LCD_WIDTH	 320
+#define LCD_HEIGHT	240
 
+#define HFP   16
+#define HSYNC 96
+#define HBP   48
 
+#define VFP   10
+#define VSYNC 2
+#define VBP   33
+
+#define ACTIVE_W (HSYNC + LCD_WIDTH + HBP - 1)
+#define ACTIVE_H (VSYNC + LCD_HEIGHT + VBP - 1)
+
+#define TOTAL_WIDTH  (HSYNC + HBP + LCD_WIDTH + HFP - 1)
+#define TOTAL_HEIGHT (VSYNC + VBP + LCD_HEIGHT + VFP - 1)
+#define PIXELWIDHT 2
 static SerialConfig uartCfg =
 {
     460800,// bit rate
@@ -87,6 +158,10 @@ static THD_FUNCTION(Thread1, arg) {
 
 	return MSG_OK;
 }
+
+
+
+
 
 
 /*
@@ -250,7 +325,7 @@ int main(void) {
    */
   halInit();
   chSysInit();
-
+  TFTLCD_Init();
   /*
    * SPI1 I/O pins setup.
    */
@@ -258,6 +333,9 @@ int main(void) {
   palSetPadMode(GPIOB, 7, PAL_MODE_ALTERNATE(7));
   palSetPadMode(GPIOB, 10, PAL_MODE_ALTERNATE(7));    
   palSetPadMode(GPIOB, 11, PAL_MODE_ALTERNATE(7));
+  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOCEN |
+      RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOEEN | RCC_AHB1ENR_GPIOFEN |
+      RCC_AHB1ENR_GPIOGEN;
 
   chMtxObjectInit(&SD3mtx);
   sdStart(&SD1, &uartCfg);
