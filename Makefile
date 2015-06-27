@@ -139,6 +139,8 @@ CSRC = $(STARTUPSRC) \
        $(CHIBIOS)/os/hal/lib/streams/memstreams.c \
        $(CHIBIOS)/os/hal/lib/streams/chprintf.c \
        $(CHIBIOS)/os/various/shell.c \
+       tftlcd.c \
+       gpiof4.c \
        sysinfo.c \
        main.c
 

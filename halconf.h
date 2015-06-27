@@ -1,6 +1,5 @@
 /*
     ChibiOS - Copyright (C) 2006..2015 Giovanni Di Sirio
-
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
     You may obtain a copy of the License at
@@ -148,7 +147,7 @@
  * @brief   Enables the SPI subsystem.
  */
 #if !defined(HAL_USE_SPI) || defined(__DOXYGEN__)
-#define HAL_USE_SPI                 FALSE
+#define HAL_USE_SPI                 TRUE
 #endif
 
 /**
