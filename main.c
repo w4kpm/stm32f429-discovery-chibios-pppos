@@ -149,10 +149,8 @@ static THD_FUNCTION(Thread1, arg) {
 
   while (TRUE) {
     palSetPad(GPIOG, 13);       /* Green.  */
-    chprintf((BaseSequentialStream*)&SD3,"pass %d\r\n",pass++);
     chThdSleepMilliseconds(500);
     palClearPad(GPIOG, 13);     /* Green.  */
-    chprintf((BaseSequentialStream*)&SD3,"pass %d\r\n",pass++);
     chThdSleepMilliseconds(500);
   }
 
@@ -160,7 +158,13 @@ static THD_FUNCTION(Thread1, arg) {
 }
 
 
+#ifndef SOCK_TARGET_HOST
+#define SOCK_TARGET_HOST  "172.30.1.98"
+#endif
 
+#ifndef SOCK_TARGET_PORT
+#define SOCK_TARGET_PORT  5901
+#endif
 
 
 
@@ -174,38 +178,217 @@ static const ShellCommand shell_commands[] = {
 	{NULL, NULL}
 };
 
-static THD_WORKING_AREA(waEchoServerThread, 512 + 1024);
+char vncbuffer[1024];
+int vncsocket;
+
+void log_data(char* text)
+{
+    chprintf((BaseSequentialStream*)&SD3,text);
+}
+
+void write_byte(uint8_t x){
+    int numbytes;
+    numbytes=lwip_send(vncsocket,&x,1,0);
+    if (numbytes != 1)
+	log_data("writeByte Incorrect length\r\n");
+}
+
+void write_string(char *str)
+{
+    int numbytes;
+    numbytes=lwip_send(vncsocket,str,strlen(str),0);
+    if (numbytes != strlen(str))
+	log_data("writeString Incorrect length\r\n");
+
+}
+
+void write_16(uint16_t data)
+{
+    int numbytes;
+    numbytes=lwip_send(vncsocket,&data,2,0);
+    if (numbytes != 2)
+	log_data("write16 Incorrect length\r\n");
+
+}
+
+
+void write_32(uint32_t data)
+{
+    int numbytes;
+    numbytes=lwip_send(vncsocket,&data,4,0);
+    if (numbytes != 4)
+	log_data("write32 Incorrect length\r\n");
+
+}
+
+
+
+void read_all_data(void)
+{
+    int x;
+    int numbytes;
+    numbytes=lwip_recv(vncsocket,&vncbuffer,1024,0);
+    vncbuffer[numbytes] = 0;
+    for (x=0;x<numbytes;x++)
+	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
+    chprintf((BaseSequentialStream*)&SD3,"\r\n");
+
+
+}
+
+
+
+void framebuffer_request(uint16_t x, 
+			 uint16_t y, 
+			 uint16_t width, 
+			 uint16_t height, 
+			 uint8_t incremental)
+{
+    read_all_data();
+    vncbuffer[0] = 3;
+    vncbuffer[1] = incremental;
+    midptr = vncbuffer+2;
+    *midptr = x;
+    midptr = vncbuffer+4;
+    *midptr = y;
+    midptr = vncbuffer+6;
+    *midptr = width;
+    midptr = vncbuffer+8;
+    *midptr = height;
+    x = lwip_send(vncsocket,&vncbuffer,10,0);
+    if (x != 10)
+	log_data("set Encodings Incorrect length\r\n");
+    process_frame_response();
+}
+
+
+
+void set_encodings()
+{
+    int x;
+    uint16_t *midptr;
+    uint32_t *longptr;
+    
+    vncbuffer[0] = 2;
+    vncbuffer[1] = 0;
+    midptr = vncbuffer+2;
+    *midptr = 3;
+    longptr = vncbuffer+4;
+    *longptr = 5;
+    longptr = vncbuffer+8;
+    *longptr = 1;
+    longptr = vncbuffer+12;
+    *longptr = 0;
+
+    for (x=0;x<16;x++)
+	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
+    chprintf((BaseSequentialStream*)&SD3,"\r\n");
+    x = lwip_send(vncsocket,&vncbuffer,16,0);
+    if (x != 16)
+	log_data("set Encodings Incorrect length\r\n");
+	
+    
+}
+
+int connect_vnc(void){
+    write_string("RFB 003.003\n");
+    write_byte(1);
+    set_encodings();
+
+}
+
+
+
+
+
+static THD_WORKING_AREA(waVncThread, 2048 );
+static THD_FUNCTION(VncThread, arg) {
+
+	int ret;
+	int x;
+	struct sockaddr_in sa;
+
+	int recsize;
+	socklen_t cli_addr_len;
+	struct sockaddr_in cli_addr;
+
+	socklen_t fromlen;
+
+	chRegSetThreadName("EchoServerThread");
+	chprintf((BaseSequentialStream*)&SD3,"Shell Server Starting \r\n");
+
+	vncsocket = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
+	if (vncsocket == -1) {
+	    chprintf((BaseSequentialStream*)&SD3,"Closing A - no socket \r\n");
+
+		return MSG_RESET;
+	}
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family = AF_INET;
+	sa.sin_port = PP_HTONS(SOCK_TARGET_PORT);
+	sa.sin_addr.s_addr = inet_addr(SOCK_TARGET_HOST);
+	fromlen = sizeof(sa);
+	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
+	chprintf((BaseSequentialStream*)&SD3,"Returned '%d' \r\n",ret);
+	connect_vnc();
+}
+
+
+static THD_WORKING_AREA(waEchoServerThread, 2048 );
 static THD_FUNCTION(EchoServerThread, arg) {
 	(void) arg;
 	int pass = 0;
   
-	int sock;
+	int sock,newsockfd;
 	struct sockaddr_in sa;
 	char buffer[1024];
 	int recsize;
+	socklen_t cli_addr_len;
+	struct sockaddr_in cli_addr;
+
 	socklen_t fromlen;
 
 	chRegSetThreadName("EchoServerThread");
+	chprintf((BaseSequentialStream*)&SD3,"Shell Server Starting \r\n");
 
-	sock = lwip_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	sock = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
 	if (sock == -1) {
+	    chprintf((BaseSequentialStream*)&SD3,"Closing A - no socket \r\n");
+
 		return MSG_RESET;
 	}
 
-	memset(&sa, 0, sizeof sa);
+	memset(&sa, 0, sizeof(sa));
 	sa.sin_family = AF_INET;
 	sa.sin_addr.s_addr = htonl(INADDR_ANY);
-	sa.sin_port = htons(8000);
+	sa.sin_port = PP_HTONS(26);
 	fromlen = sizeof(sa);
 
 	if (lwip_bind(sock, (struct sockaddr *) &sa, sizeof(sa)) == -1) {
+	    chprintf((BaseSequentialStream*)&SD3,"Closing B - no BIND \r\n");
+		lwip_close(sock);
+		return MSG_RESET;
+	}
+	if (lwip_listen(sock, 1) < 0) {
 		lwip_close(sock);
 		return MSG_RESET;
 	}
 
 	while (!chThdShouldTerminateX()) {
-		recsize = lwip_recvfrom(sock, buffer, sizeof(buffer), 0,
+	    chprintf((BaseSequentialStream*)&SD3,"Attempting to rx\r\n");
+	    newsockfd = lwip_accept(sock, (struct sockaddr *) &cli_addr,
+				    &cli_addr_len);
+	    if (newsockfd < 0) {
+		break;
+	    }
+	    chprintf((BaseSequentialStream*)&SD3,"Accepted\r\n");
+	    chThdSleepMilliseconds(100);
+	    while (!chThdShouldTerminateX()) {
+
+		recsize = lwip_recvfrom(newsockfd, buffer, sizeof(buffer), 0,
 				(struct sockaddr *) &sa, &fromlen);
+		chprintf((BaseSequentialStream*)&SD3,"recsize %d - fromlen %d\r\n",recsize,fromlen);
 		if (recsize < 0) {
 			break;
 		}
@@ -219,8 +402,10 @@ static THD_FUNCTION(EchoServerThread, arg) {
 			palSetPad(GPIOG, 14);
 		    }
 
-		lwip_sendto(sock, (void *) buffer, recsize, 0, (struct sockaddr *) &sa,
+		lwip_sendto(newsockfd, (void *) buffer, recsize, 0, (struct sockaddr *) &sa,
 				fromlen);
+	    }
+	    lwip_close(sock);
 	}
 
 	lwip_close(sock);
@@ -246,6 +431,7 @@ static THD_FUNCTION(ShellServerThread, arg) {
 	thread_t *shelltp;
 
 	chRegSetThreadName("ShellServerThread");
+	chprintf((BaseSequentialStream*)&SD3,"Shell Server Starting \r\n");
 
 	memset(&serv_addr, 0, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
@@ -293,6 +479,27 @@ static THD_FUNCTION(ShellServerThread, arg) {
 	return MSG_OK;
 }
 
+
+static THD_WORKING_AREA(waShellServerThread2, 512);
+static THD_FUNCTION(ShellServerThread2, arg) {
+	(void) arg;
+
+
+	ShellConfig shell_cfg;
+	thread_t *shelltp;
+
+	chRegSetThreadName("ShellServerThread2");
+
+	shell_cfg.sc_channel = (BaseSequentialStream*) &SD3;
+	shell_cfg.sc_commands = shell_commands;
+
+	shelltp = shellCreate(&shell_cfg, SHELL_WA_SIZE, NORMALPRIO+2);
+		chThdWait(shelltp);
+
+
+	return MSG_OK;
+}
+
 /*
  * Handle link status events
  */
@@ -315,6 +522,7 @@ int main(void) {
   unsigned i;
   thread_t *echoServerThread = 0;
   thread_t *shellServerThread = 0;
+  thread_t *shellServerThread2 = 0;
 
   /*
    * System initializations.
@@ -404,10 +612,12 @@ int main(void) {
 			}
 			
 		}
+		chprintf((BaseSequentialStream*)&SD3,"entering connection \r\n");
 
 		// Make sure connection is stable
 		while (connected < 5) {
 			chThdSleep(MS2ST(100));
+			printf("Connected\r\n");
 			if (connected == 0) { // reset by pppThread while waiting for stable connection
 			    chprintf((BaseSequentialStream*)&SD3,"Close Connection - not stable\r\n");
 			    chThdSleepMilliseconds(100);
@@ -419,11 +629,19 @@ int main(void) {
 		}
 
 		// Run server threads
-		echoServerThread = chThdCreateStatic(waEchoServerThread,
-				sizeof(waEchoServerThread), NORMALPRIO + 1, EchoServerThread, NULL);
-		shellServerThread = chThdCreateStatic(waShellServerThread,
-				sizeof(waShellServerThread), NORMALPRIO + 1, ShellServerThread,
-				NULL);
+
+		echoServerThread = chThdCreateStatic(waVncThread,
+						     sizeof(waVncThread), NORMALPRIO + 1, VncThread, NULL);
+
+		//		echoServerThread = chThdCreateStatic(waEchoServerThread,
+		//						     sizeof(waEchoServerThread), NORMALPRIO + 1, EchoServerThread, NULL);
+		//		shellServerThread = chThdCreateStatic(waShellServerThread,
+		//						      sizeof(waShellServerThread), NORMALPRIO + 1, ShellServerThread,
+		//						NULL);
+
+		/*		shellServerThread2 = chThdCreateStatic(waShellServerThread2,
+				sizeof(waShellServerThread2), NORMALPRIO + 1, ShellServerThread2,
+				NULL);*/
 
 		while (connected > 0) {
 			chThdSleep(MS2ST(200));
