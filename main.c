@@ -186,6 +186,13 @@ void log_data(char* text)
     chprintf((BaseSequentialStream*)&SD3,text);
 }
 
+void log_data_num(char* text,int data)
+{
+    chprintf((BaseSequentialStream*)&SD3,text,data);
+}
+
+
+
 void write_byte(uint8_t x){
     int numbytes;
     numbytes=lwip_send(vncsocket,&x,1,0);
@@ -208,8 +215,11 @@ void write_16(uint16_t data)
     numbytes=lwip_send(vncsocket,&data,2,0);
     if (numbytes != 2)
 	log_data("write16 Incorrect length\r\n");
-
 }
+
+
+
+
 
 
 void write_32(uint32_t data)
@@ -223,18 +233,129 @@ void write_32(uint32_t data)
 
 
 
-void read_all_data(void)
+void set_16(uint8_t *buffer, uint16_t data)
+{    
+    // Endianess differs - we need to swap the bytes
+
+    int x;
+    for (x=0;x<2;x++)
+	*(buffer+x) = 0xFF & (data >> 8*(1-x));
+}
+
+uint8_t read_8(void)
+{    
+    // Endianess differs - we need to swap the bytes
+
+
+    uint8_t data;
+    int numbytes;
+    data = 0;
+    numbytes=lwip_recv(vncsocket,&data,1,0);
+    if (numbytes != 1)
+	log_data("read_8 Incorrect length\r\n");
+    return data;
+}
+
+
+
+uint16_t read_16(void)
+{    
+    // Endianess differs - we need to swap the bytes
+
+
+    uint16_t data;
+    int numbytes;
+    data = 0;
+    numbytes=lwip_recv(vncsocket,&vncbuffer,2,0);
+    if (numbytes != 2)
+	log_data("read_8 Incorrect length\r\n");
+
+    data = data | vncbuffer[1];
+    data = data | vncbuffer[0] << 8;
+    return data;
+}
+
+
+uint32_t read_32(void)
+{    
+    // Endianess differs - we need to swap the bytes
+
+
+    uint32_t data;
+    int numbytes;
+    data = 0;
+    numbytes=lwip_recv(vncsocket,&vncbuffer,4,0);
+    if (numbytes != 4)
+	log_data("read_8 Incorrect length\r\n");
+
+    data = data | vncbuffer[3];
+    data = data | vncbuffer[2] << 8;
+    data = data | vncbuffer[1] << 16;
+    data = data | vncbuffer[0] << 24;
+    return data;
+}
+
+
+
+void set_32(uint8_t *buffer, uint32_t data)
+{    
+    // Endianess differs - we need to swap the bytes
+    int x;
+    for (x=0;x<4;x++)
+	*(buffer+x) = 0xFF & (data >> 8*(3-x));
+}
+
+
+
+
+
+void read_all_data(char* str)
 {
     int x;
     int numbytes;
     numbytes=lwip_recv(vncsocket,&vncbuffer,1024,0);
-    vncbuffer[numbytes] = 0;
+    ///vncbuffer[numbytes] = 0;
+    chprintf((BaseSequentialStream*)&SD3,"%s Data Dump:\r\n    ",str);
     for (x=0;x<numbytes;x++)
 	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
     chprintf((BaseSequentialStream*)&SD3,"\r\n");
 
 
 }
+
+
+void process_frame_response()
+{
+    read_all_data("Doing process_frame_response");
+    lwip_close(vncsocket);
+}
+
+void read_pixel_format_data(void)
+{
+    uint32_t strLength;
+    log_data_num("width: %d\r\n",read_16()); 
+    log_data_num("height: %d\r\n",read_16()); 
+    log_data_num("bpp: %d\r\n",read_8()); 
+    log_data_num("depth: %d\r\n",read_8()); 
+    log_data_num("big-endian: %d\r\n",read_8()); 
+    log_data_num("true-color: %d\r\n",read_8()); 
+    log_data_num("red-max: %d\r\n",read_16()); 
+    log_data_num("green-max: %d\r\n",read_16()); 
+    log_data_num("blue-max: %d\r\n",read_16()); 
+    log_data_num("red-shift: %d\r\n",read_8()); 
+    log_data_num("green-shift: %d\r\n",read_8()); 
+    log_data_num("blue-shift: %d\r\n",read_8());
+    lwip_recv(vncsocket,&vncbuffer,3,0); // per the protocol, there is 
+                                         // three bytes of padding
+    strLength= read_32();
+    lwip_recv(vncsocket,&vncbuffer,strLength,0); // per the protocol, there is 
+    vncbuffer[strLength] = 0;
+    log_data("name:\r\n     ");
+    log_data(vncbuffer);
+    log_data("\r\n");
+
+}
+
 
 
 
@@ -244,19 +365,21 @@ void framebuffer_request(uint16_t x,
 			 uint16_t height, 
 			 uint8_t incremental)
 {
-    read_all_data();
+    int len;
+    uint16_t *midptr;
+    uint32_t *longptr;
+
+    //    read_all_data("Begin FB Request");
+    read_pixel_format_data();
     vncbuffer[0] = 3;
     vncbuffer[1] = incremental;
-    midptr = vncbuffer+2;
-    *midptr = x;
-    midptr = vncbuffer+4;
-    *midptr = y;
-    midptr = vncbuffer+6;
-    *midptr = width;
-    midptr = vncbuffer+8;
-    *midptr = height;
-    x = lwip_send(vncsocket,&vncbuffer,10,0);
-    if (x != 10)
+    set_16(vncbuffer+2,x);
+    set_16(vncbuffer+4,y);
+    set_16(vncbuffer+6,width);
+    set_16(vncbuffer+8,height);
+
+    len = lwip_send(vncsocket,&vncbuffer,10,0);
+    if (len != 10)
 	log_data("set Encodings Incorrect length\r\n");
     process_frame_response();
 }
@@ -271,15 +394,12 @@ void set_encodings()
     
     vncbuffer[0] = 2;
     vncbuffer[1] = 0;
-    midptr = vncbuffer+2;
-    *midptr = 3;
-    longptr = vncbuffer+4;
-    *longptr = 5;
-    longptr = vncbuffer+8;
-    *longptr = 1;
-    longptr = vncbuffer+12;
-    *longptr = 0;
+    set_16(vncbuffer+2,3);
+    set_32(vncbuffer+4,5);
+    set_32(vncbuffer+8,1);
+    set_32(vncbuffer+12,0);
 
+    chprintf((BaseSequentialStream*)&SD3,"Encoding:\r\n    ");
     for (x=0;x<16;x++)
 	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
     chprintf((BaseSequentialStream*)&SD3,"\r\n");
@@ -292,9 +412,12 @@ void set_encodings()
 
 int connect_vnc(void){
     write_string("RFB 003.003\n");
-    write_byte(1);
-    set_encodings();
 
+    write_byte(1); // Share flag - we allow sharing
+
+    set_encodings();
+    read_all_data("Server Response");
+    read_all_data("Security Code");
 }
 
 
@@ -332,6 +455,8 @@ static THD_FUNCTION(VncThread, arg) {
 	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
 	chprintf((BaseSequentialStream*)&SD3,"Returned '%d' \r\n",ret);
 	connect_vnc();
+	framebuffer_request(0,0,32,32,0);
+	
 }
 
 
