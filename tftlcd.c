@@ -73,7 +73,7 @@ void TFTLCD_Init(void)
 		i++;
 	}
 	/* PLL  */
-	RCC->PLLSAICFGR = (400 << 6) | (7 << 24) | (4 << 28); /// was 200 - I think this sets the mhz 
+	RCC->PLLSAICFGR = (320 << 6) | (7 << 24) | (4 << 28); /// was 200 = 25mHz 400 = 50mHz 320=40mHz
 	/* Enable SAI PLL */
 	RCC->CR |= RCC_CR_PLLSAION;
 	/* wait for SAI PLL ready */

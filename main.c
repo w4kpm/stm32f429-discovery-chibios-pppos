@@ -178,18 +178,53 @@ static const ShellCommand shell_commands[] = {
 	{NULL, NULL}
 };
 
-char vncbuffer[1024];
+char vncbuffer[2048]; // shouldn't ever get more than 1024
 int vncsocket;
 
 void log_data(char* text)
 {
+    return;
     chprintf((BaseSequentialStream*)&SD3,text);
 }
 
 void log_data_num(char* text,int data)
 {
+    return;
     chprintf((BaseSequentialStream*)&SD3,text,data);
 }
+
+
+void ensure_bytes(uint16_t numbytes)
+{
+    // I had problems with recv not returning the number of bytes that 
+    // I requested - I am assuming that recv also returns when it hits the 
+    // end of a packet, not neccecerily when it gets the number of bytes requested.
+    // In order to get the required number of bytes, I loop until I have read everything
+    // I asked for.
+    int currentbytes;
+    uint16_t readbytes,neededbytes;
+    uint8_t *buffpos;
+
+    readbytes =0;
+    neededbytes = numbytes;
+    buffpos = &vncbuffer;
+    while (readbytes < numbytes)
+	{
+	    //chThdSleepMilliseconds(10);
+	    //log_data_num("we need %d \r\n",neededbytes);
+	    //log_data_num("we have %d \r\n",readbytes);
+	    currentbytes=lwip_recv(vncsocket,(uint8_t *)buffpos+readbytes,neededbytes,0);
+	    if (currentbytes < 0)
+		{
+		    log_data_num("we got an error reading %d \r\n",currentbytes);
+		    return;
+		}
+	    //log_data_num("we read %d \r\n",currentbytes);
+	    readbytes += currentbytes;
+	    neededbytes -= currentbytes;
+	}	
+}
+
 
 
 
@@ -252,7 +287,7 @@ uint8_t read_8(void)
     data = 0;
     numbytes=lwip_recv(vncsocket,&data,1,0);
     if (numbytes != 1)
-	log_data("read_8 Incorrect length\r\n");
+	log_data_num("read_8 Incorrect length\r\n",numbytes);
     return data;
 }
 
@@ -265,11 +300,7 @@ uint16_t read_16(void)
 
     uint16_t data;
     int numbytes;
-    data = 0;
-    numbytes=lwip_recv(vncsocket,&vncbuffer,2,0);
-    if (numbytes != 2)
-	log_data("read_8 Incorrect length\r\n");
-
+    ensure_bytes(2);
     data = data | vncbuffer[1];
     data = data | vncbuffer[0] << 8;
     return data;
@@ -284,10 +315,7 @@ uint32_t read_32(void)
     uint32_t data;
     int numbytes;
     data = 0;
-    numbytes=lwip_recv(vncsocket,&vncbuffer,4,0);
-    if (numbytes != 4)
-	log_data("read_8 Incorrect length\r\n");
-
+    ensure_bytes(4);
     data = data | vncbuffer[3];
     data = data | vncbuffer[2] << 8;
     data = data | vncbuffer[1] << 16;
@@ -311,10 +339,18 @@ void set_32(uint8_t *buffer, uint32_t data)
 
 void read_all_data(char* str)
 {
+    /* reads all bytes left in queue - NB - it looks like lwip breaks 
+       at the end of each remote transition, so even though this completes, 
+       there may be another packet waiting */
     int x;
     int numbytes;
+    numbytes=lwip_recv(vncsocket,&vncbuffer,1024,MSG_PEEK|MSG_DONTWAIT);
+    if (numbytes ==0)
+	{
+	    chprintf((BaseSequentialStream*)&SD3,"%s: No Data\r\n",str);
+	    return;
+	}
     numbytes=lwip_recv(vncsocket,&vncbuffer,1024,0);
-    ///vncbuffer[numbytes] = 0;
     chprintf((BaseSequentialStream*)&SD3,"%s Data Dump:\r\n    ",str);
     for (x=0;x<numbytes;x++)
 	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
@@ -324,10 +360,219 @@ void read_all_data(char* str)
 }
 
 
+
+void read_copy_rect(int xpos, int ypos, int width, int height)
+{
+    uint16_t sourcex,sourcey;
+    char text[255];
+    sourcex = read_16();
+    sourcey = read_16();
+    //sprintf(text,"copy-rect. source %d,%d dest: %d,%d size:%d,%d\r\n",sourcex,sourcey,xpos,ypos,height,width);
+    //log_data(text);
+}
+
+
+void read_raw_rect(int x,int y, int w, int h)
+{
+    int bytecount;
+    char text[255];
+    //log_data_num("reading %d bytes\r\n",(w * h * 4));
+    ensure_bytes((w * h * 4));
+	
+}
+
+
+uint8_t clipit (int currentpos, int maxpos)
+{
+    int currentx;
+    currentx = currentpos*16;
+    if ((currentx + 16) < maxpos)
+	return 16;
+    else
+	return (16 - ( (currentx + 16) - maxpos));	    
+}
+
+// these may need to be kept between runs 
+// the protocol only sends them once and then reuses them.
+// I'm not sure if this is true between frame requeses,
+// I made them global just in case.
+uint32_t hextile_bg_color;
+uint32_t hextile_fg_color;
+void fill_rect(uint32_t color, int x, int y, int width, int height)
+{
+    char text[255];
+    //sprintf(text,"Fill Rect %X pos:%d,%d size:%d,%d\r\n",color,x,y,height,width);
+    //log_data(text);
+}
+
+void process_colored_rects(int rectCount, int startX, int startY)
+{
+    int count;
+    uint32_t currentcolor;
+    uint8_t xy,wh;
+    uint8_t x,y,h,w;
+    //log_data_num("start colored rects %d\r\n",rectCount);
+    for (count = 0;count < rectCount; count++)
+	{
+	    //	    log_data_num("colored Rect #%d\r\n",count);
+	    currentcolor = read_32();
+	    xy = read_8();
+	    wh = read_8();
+	    y = xy & 0xf;
+	    x = (xy & 0xf0) >> 4;
+	    h = wh & 0xf;
+	    w = (wh & 0xf0) >> 4;
+	    fill_rect(currentcolor,startX + x,startY+y,w+1,h+1);
+	}
+}
+	    
+void process_foreground_rects(uint32_t fgcolor,int rectCount, int startX, int startY)
+{
+    int count;
+
+    uint8_t xy,wh;
+    uint8_t x,y,h,w;
+    //log_data_num("start foreground rects %d\r\n",rectCount);
+    for (count = 0;count < rectCount; count++)
+	{
+	    //	    log_data_num("foreground Rect #%d\r\n",count);
+	    xy = read_8();
+	    wh = read_8();
+	    y = xy & 0xf;
+	    x = (xy & 0xf0) >> 4;
+	    h = wh & 0xf;
+	    w = (wh & 0xf0) >> 4;
+	    fill_rect(fgcolor,startX + x,startY+y,w+1,h+1);
+	}
+}
+	    
+
+
+
+void read_hextile_rect(int x,int y, int width, int height)
+{
+    int y2,x2;
+    char text[255];
+    uint8_t subencoding,raw,background,foreground,anysubrects,coloredrects;
+    int newwidth,newheight;
+    int subrect_count;
+    for (y2=0;y2<height/16.0;y2++)
+	for(x2=0;x2<width/16.0;x2++)
+	    {
+		//chThdSleepMilliseconds(10);
+		subencoding = read_8();
+		raw = subencoding & 1;
+		background = subencoding & 2;
+		foreground = subencoding & 4;
+		anysubrects = subencoding & 8;
+		coloredrects = subencoding & 16;
+		//sprintf(text,"subencoding %X raw:%x bg:%x fg:%x asr:%x cr:%x\r\n",subencoding,
+		//	raw,background,foreground,anysubrects,coloredrects);
+		//log_data(text);
+		newwidth = clipit(x2,width);
+		newheight = clipit(y2,height);
+		if (raw)
+		    {
+			//sprintf(text,"starting raw rect pos: %d,%d size:%d,%d\r\n",x+16*x2,y+16*y2,newwidth,newheight);
+			//log_data(text);
+			read_raw_rect(x+16*x2,y+16*y2,newwidth,newheight);
+		    }
+		else
+		    {
+			if (background)
+			    {
+				
+				hextile_bg_color = read_32();
+				//log_data_num("new bg color %X\r\n",hextile_bg_color);			    
+			    }
+			if (foreground)
+			    {
+				hextile_fg_color = read_32();
+				//log_data_num("new fg color %X\r\n",hextile_fg_color);			    }
+			    }
+			if (anysubrects)
+			    {
+				subrect_count = read_8();
+				//log_data_num("subrec Count %d\r\n",subrect_count);
+			    }
+			// fill bg rect here 
+		        fill_rect(hextile_bg_color,x2*16+x,y2*16+y,newwidth,newheight);
+			//  I think these are mutually exclusive.
+			if (coloredrects)
+			    process_colored_rects(subrect_count,x2*16+x,y2*16+y);
+			else
+			    if (anysubrects)
+				process_foreground_rects(hextile_fg_color,subrect_count,x2*16+x,y2*16+y);
+		    }
+		
+		
+		
+	    }
+	    
+}
+
+
+
+
+
+void read_fb_rect(void)
+{
+    uint16_t xpos,ypos,height,width;
+    uint32_t encoding;
+    char text[255];
+    xpos = read_16();
+    ypos = read_16();
+    height = read_16();
+    width = read_16();
+    encoding = read_32();
+    //sprintf(text,"New Rect %d %d %d %d %d\r\n",xpos,ypos,height,width,encoding);
+    //log_data(text);
+    switch (encoding)
+	{
+	case 0: 
+	    read_raw_rect(xpos,ypos,height,width);
+	    break;
+	case 1:
+	    read_copy_rect(xpos,ypos,height,width);
+	    break;
+        case 5:
+	    read_hextile_rect(xpos,ypos,height,width);
+	    break;
+	default:
+	    log_data_num("Got unexpected encoding %d\r\n",encoding);
+	}
+
+	    
+	
+}
+
+
+
 void process_frame_response()
 {
-    read_all_data("Doing process_frame_response");
-    lwip_close(vncsocket);
+    uint8_t message,padding;
+    int x;
+    uint16_t numrects;
+    message = read_8();
+    if (message == 0)
+	{
+	    padding = read_8();
+	    numrects = read_16();
+	    //log_data_num("number of high level rects %d\r\n",numrects);
+	    for (x=0;x<numrects;x++)
+		{
+		    //	    log_data_num("high level rect # %d\r\n",x);
+		    read_fb_rect();
+		    //chThdSleepMilliseconds(10);
+		}
+	}
+    else
+	{
+	    log_data_num("Unexpected message (%d) -- (I was expecting frame response, but got something else):\r\n",message);
+	}
+    
+    //    read_all_data("Doing process_frame_response");
+    //lwip_close(vncsocket);
 }
 
 void read_pixel_format_data(void)
@@ -348,7 +593,7 @@ void read_pixel_format_data(void)
     lwip_recv(vncsocket,&vncbuffer,3,0); // per the protocol, there is 
                                          // three bytes of padding
     strLength= read_32();
-    lwip_recv(vncsocket,&vncbuffer,strLength,0); // per the protocol, there is 
+    ensure_bytes(strLength);
     vncbuffer[strLength] = 0;
     log_data("name:\r\n     ");
     log_data(vncbuffer);
@@ -370,8 +615,7 @@ void framebuffer_request(uint16_t x,
     uint32_t *longptr;
 
     //    read_all_data("Begin FB Request");
-    read_pixel_format_data();
-    vncbuffer[0] = 3;
+    vncbuffer[0] = 3; // message type
     vncbuffer[1] = incremental;
     set_16(vncbuffer+2,x);
     set_16(vncbuffer+4,y);
@@ -389,25 +633,26 @@ void framebuffer_request(uint16_t x,
 void set_encodings()
 {
     int x;
-    uint16_t *midptr;
-    uint32_t *longptr;
     
-    vncbuffer[0] = 2;
-    vncbuffer[1] = 0;
-    set_16(vncbuffer+2,3);
-    set_32(vncbuffer+4,5);
-    set_32(vncbuffer+8,1);
-    set_32(vncbuffer+12,0);
+    vncbuffer[0] = 2; // message
+    vncbuffer[1] = 0; // padding
+    set_16(vncbuffer+2,3); // we're using 3 encodings
+    set_32(vncbuffer+4,5); // hextile
+    set_32(vncbuffer+8,1); // copyrect
+    set_32(vncbuffer+12,0); // raw
 
-    chprintf((BaseSequentialStream*)&SD3,"Encoding:\r\n    ");
-    for (x=0;x<16;x++)
-	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
-    chprintf((BaseSequentialStream*)&SD3,"\r\n");
+    // - only to print out raw bytes and make sure things were 
+    // in correct order.
+
+    //chprintf((BaseSequentialStream*)&SD3,"Encoding:\r\n    ");
+    //for (x=0;x<16;x++)
+    //	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
+    //chprintf((BaseSequentialStream*)&SD3,"\r\n");
     x = lwip_send(vncsocket,&vncbuffer,16,0);
     if (x != 16)
 	log_data("set Encodings Incorrect length\r\n");
 	
-    
+
 }
 
 int connect_vnc(void){
@@ -418,6 +663,7 @@ int connect_vnc(void){
     set_encodings();
     read_all_data("Server Response");
     read_all_data("Security Code");
+    read_pixel_format_data();    
 }
 
 
@@ -428,6 +674,7 @@ static THD_WORKING_AREA(waVncThread, 2048 );
 static THD_FUNCTION(VncThread, arg) {
 
 	int ret;
+	int pass;
 	int x;
 	struct sockaddr_in sa;
 
@@ -455,7 +702,26 @@ static THD_FUNCTION(VncThread, arg) {
 	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
 	chprintf((BaseSequentialStream*)&SD3,"Returned '%d' \r\n",ret);
 	connect_vnc();
-	framebuffer_request(0,0,32,32,0);
+	//chThdSleepMilliseconds(5000);
+	framebuffer_request(0,0,320,240,0);
+	while (TRUE)
+	    {
+		log_data("****************************************\r\n");
+		//read_all_data("getting ready to read");
+		chprintf((BaseSequentialStream*)&SD3,".");
+		//chThdSleepMilliseconds(10);
+		framebuffer_request(0,0,320,240,1);
+		pass ++;
+		if (pass%2 ==0)
+		    {
+			palClearPad(GPIOG, 14);
+		    }
+		else
+		    {
+			palSetPad(GPIOG, 14);
+		    }
+
+	    }
 	
 }
 
@@ -756,7 +1022,7 @@ int main(void) {
 		// Run server threads
 
 		echoServerThread = chThdCreateStatic(waVncThread,
-						     sizeof(waVncThread), NORMALPRIO + 1, VncThread, NULL);
+						     sizeof(waVncThread), NORMALPRIO + 2, VncThread, NULL);
 
 		//		echoServerThread = chThdCreateStatic(waEchoServerThread,
 		//						     sizeof(waEchoServerThread), NORMALPRIO + 1, EchoServerThread, NULL);
@@ -781,3 +1047,6 @@ int main(void) {
 
   return 0;
 }
+
+
+
