@@ -11,16 +11,23 @@
 //=================================================================================================
 // LCD configuration - change if you need
 //=================================================================================================
-#define LCD_WIDTH		320
-#define LCD_HEIGHT		240
+#define LCD_WIDTH		800
+#define LCD_HEIGHT		480
 
-#define HFP 	10
-#define HSYNC 	10
-#define HBP 	20
+//mode "800x480-60"
+//# D: 29.500 MHz, H: 29.738 kHz, V: 60.00 Hz
+//    geometry 800 480 800 480 32 timings 33805 96  24  10  3    72     7 endmode
+//                                             hbp hfp vbp  vfp  hsync  vsync                                  
 
-#define VFP 	4
-#define VSYNC 	2
-#define VBP 	2
+
+
+#define HFP 	24   // all of these were found in a standard timings file - not sure if they were right, but they seem to work
+#define HSYNC 	72   // however - I was pumping in random data- so it may not work correctly -     
+#define HBP 	96   // the data sheet of the LCD panel didn't seem to specify them.
+
+#define VFP 	3
+#define VSYNC 	7
+#define VBP 	10
 //=================================================================================================
 // Areas computation
 //=================================================================================================
@@ -66,7 +73,7 @@ void TFTLCD_Init(void)
 		i++;
 	}
 	/* PLL  */
-	RCC->PLLSAICFGR = (200 << 6) | (7 << 24) | (4 << 28);
+	RCC->PLLSAICFGR = (400 << 6) | (7 << 24) | (4 << 28); /// was 200 - I think this sets the mhz 
 	/* Enable SAI PLL */
 	RCC->CR |= RCC_CR_PLLSAION;
 	/* wait for SAI PLL ready */
