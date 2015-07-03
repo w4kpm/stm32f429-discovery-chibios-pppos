@@ -28,6 +28,7 @@
 #include "chprintf.h"
 #include "shell.h"
 #include "sysinfo.h"
+#include "sdram.h"
 #include "lwip/sockets.h"
 #include <string.h>
 #include "ppp/ppp.h"
@@ -37,7 +38,6 @@
 static uint8_t txbuf[2];
 static uint8_t rxbuf[2];
 static char text[255];
-
 static const SPIConfig std_spicfg1 = {
   NULL,
   GPIOC,                                                        /*port of CS  */
@@ -92,6 +92,7 @@ void spi_write(device,location,data)
 
 mutex_t SD3mtx;
 void TFTLCD_Init(void);
+void SDRAM_Init(void);
 /* stolen from a version of sys_arch I found on wizhippo's github 
 
 https://github.com/wizhippo/stm32f4-chibios-lwip-pppos.git
@@ -112,23 +113,9 @@ u32_t sys_jiffies(void) {
 }
 
 
-#define LCD_WIDTH	 320
-#define LCD_HEIGHT	240
+#define LCD_WIDTH	 800
+#define LCD_HEIGHT	480
 
-#define HFP   16
-#define HSYNC 96
-#define HBP   48
-
-#define VFP   10
-#define VSYNC 2
-#define VBP   33
-
-#define ACTIVE_W (HSYNC + LCD_WIDTH + HBP - 1)
-#define ACTIVE_H (VSYNC + LCD_HEIGHT + VBP - 1)
-
-#define TOTAL_WIDTH  (HSYNC + HBP + LCD_WIDTH + HFP - 1)
-#define TOTAL_HEIGHT (VSYNC + VBP + LCD_HEIGHT + VFP - 1)
-#define PIXELWIDHT 2
 static SerialConfig uartCfg =
 {
     460800,// bit rate
@@ -404,6 +391,22 @@ void fill_rect(uint32_t color, int x, int y, int width, int height)
     //sprintf(text,"Fill Rect %X pos:%d,%d size:%d,%d\r\n",color,x,y,height,width);
     //log_data(text);
 }
+
+void fill_rect2(uint32_t color, int x, int y, int width, int height) 
+{
+    DMA2D->CR = 3 << 16;
+    DMA2D->OPFCCR = 0x2;
+    DMA2D->OCOLR = color;
+  
+    DMA2D->OMAR = 0xD0000000 + (800 * y *2) + x*2;
+    DMA2D->OOR = LCD_WIDTH - width;
+    DMA2D->NLR = (uint32_t) ((width << 16) | height);
+    DMA2D->CR |= 1;
+    while (DMA2D->CR & DMA2D_CR_START) {
+    }
+
+}
+
 
 void process_colored_rects(int rectCount, int startX, int startY)
 {
@@ -909,8 +912,13 @@ static void ppp_linkstatus_callback(void *ctx, int errCode, void *arg) {
 }
 
 
+uint32_t Current_color;
+
+
+
+
 int main(void) {
-  unsigned i;
+    //  unsigned i;
   thread_t *echoServerThread = 0;
   thread_t *shellServerThread = 0;
   thread_t *shellServerThread2 = 0;
@@ -922,9 +930,10 @@ int main(void) {
    * - Kernel initialization, the main() function becomes a thread and the
    *   RTOS is active.
    */
+  uint32_t i;
   halInit();
   chSysInit();
-  TFTLCD_Init();
+
   /*
    * SPI1 I/O pins setup.
    */
@@ -942,7 +951,24 @@ int main(void) {
 
   palSetPadMode(GPIOG, 13, PAL_MODE_OUTPUT_PUSHPULL); 
   palSetPadMode(GPIOG, 14, PAL_MODE_OUTPUT_PUSHPULL );
-  chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO + 1, Thread1, NULL);  
+  chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO + 1, Thread1, NULL);
+  RCC->AHB1ENR |= RCC_AHB1ENR_DMA2DEN;
+
+  SDRAM_Init();
+  TFTLCD_Init();
+  //  chThdSleepMilliseconds(1000);
+
+  //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
+  //  *(uint16_t *)i = 0x0700;
+  fill_rect2(0x0000,0,0,800,480);
+  fill_rect2(0x0700,200,100,100,100);
+  fill_rect2(0x001f,200,200,100,100);
+  fill_rect2(0xf000,100,100,100,100);
+
+
+
+
+
   printf("test from printf \r\n");
   chprintf((BaseSequentialStream*)&SD3,"After start thread\r\n");
   chThdSleepMilliseconds(100);
