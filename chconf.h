@@ -28,8 +28,8 @@
 #ifndef _CHCONF_H_
 #define _CHCONF_H_
 
-#define STDOUT_SD SD3
-#define STDIN_SD SD3
+#define STDOUT_SD SD4
+#define STDIN_SD SD4
 
 
 #define STM32F429xx

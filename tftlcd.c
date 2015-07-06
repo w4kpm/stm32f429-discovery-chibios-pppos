@@ -14,6 +14,7 @@
 #define LCD_WIDTH		800
 #define LCD_HEIGHT		480
 
+
 //mode "800x480-60"
 //# D: 29.500 MHz, H: 29.738 kHz, V: 60.00 Hz
 //    geometry 800 480 800 480 32 timings 33805 96  24  10  3    72     7 endmode
@@ -95,7 +96,7 @@ void TFTLCD_Init(void)
 	/* Pixel Format Configuration */
 	LTDC_Layer1->PFCR   = 2;
 	/* Color Frame Buffer Address */
-	LTDC_Layer1->CFBAR  = 0x20000000;
+	LTDC_Layer1->CFBAR  = 0xD0000000;
 	/* Color Frame Buffer Length */
 	LTDC_Layer1->CFBLR  = ((LCD_WIDTH * PIXELWIDTH) << 16) | ((LCD_WIDTH * PIXELWIDTH) + 3);
 	/* Enable Layer */

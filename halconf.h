@@ -28,8 +28,6 @@
 #define _HALCONF_H_
 
 #include "mcuconf.h"
-#define STDOUT_SD SD3
-#define STDIN_SD SD3
 
 /**
  * @brief   Enables the PAL subsystem.

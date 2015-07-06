@@ -90,7 +90,7 @@ void spi_write(device,location,data)
 
 
 
-mutex_t SD3mtx;
+
 void TFTLCD_Init(void);
 void SDRAM_Init(void);
 /* stolen from a version of sys_arch I found on wizhippo's github 
@@ -171,13 +171,13 @@ int vncsocket;
 void log_data(char* text)
 {
     return;
-    chprintf((BaseSequentialStream*)&SD3,text);
+    chprintf((BaseSequentialStream*)&SD4,text);
 }
 
 void log_data_num(char* text,int data)
 {
     return;
-    chprintf((BaseSequentialStream*)&SD3,text,data);
+    chprintf((BaseSequentialStream*)&SD4,text,data);
 }
 
 
@@ -334,14 +334,14 @@ void read_all_data(char* str)
     numbytes=lwip_recv(vncsocket,&vncbuffer,1024,MSG_PEEK|MSG_DONTWAIT);
     if (numbytes ==0)
 	{
-	    chprintf((BaseSequentialStream*)&SD3,"%s: No Data\r\n",str);
+	    chprintf((BaseSequentialStream*)&SD4,"%s: No Data\r\n",str);
 	    return;
 	}
     numbytes=lwip_recv(vncsocket,&vncbuffer,1024,0);
-    chprintf((BaseSequentialStream*)&SD3,"%s Data Dump:\r\n    ",str);
+    chprintf((BaseSequentialStream*)&SD4,"%s Data Dump:\r\n    ",str);
     for (x=0;x<numbytes;x++)
-	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
-    chprintf((BaseSequentialStream*)&SD3,"\r\n");
+	chprintf((BaseSequentialStream*)&SD4,"0x%X ",vncbuffer[x]);
+    chprintf((BaseSequentialStream*)&SD4,"\r\n");
 
 
 }
@@ -385,14 +385,14 @@ uint8_t clipit (int currentpos, int maxpos)
 // I made them global just in case.
 uint32_t hextile_bg_color;
 uint32_t hextile_fg_color;
-void fill_rect(uint32_t color, int x, int y, int width, int height)
-{
-    char text[255];
+//void fill_rect(uint32_t color, int x, int y, int width, int height)
+//{
+//    char text[255];
     //sprintf(text,"Fill Rect %X pos:%d,%d size:%d,%d\r\n",color,x,y,height,width);
     //log_data(text);
-}
+//}
 
-void fill_rect2(uint32_t color, int x, int y, int width, int height) 
+void fill_rect(uint32_t color, int x, int y, int width, int height) 
 {
     DMA2D->CR = 3 << 16;
     DMA2D->OPFCCR = 0x2;
@@ -647,10 +647,10 @@ void set_encodings()
     // - only to print out raw bytes and make sure things were 
     // in correct order.
 
-    //chprintf((BaseSequentialStream*)&SD3,"Encoding:\r\n    ");
+    //chprintf((BaseSequentialStream*)&SD4,"Encoding:\r\n    ");
     //for (x=0;x<16;x++)
-    //	chprintf((BaseSequentialStream*)&SD3,"0x%X ",vncbuffer[x]);
-    //chprintf((BaseSequentialStream*)&SD3,"\r\n");
+    //	chprintf((BaseSequentialStream*)&SD4,"0x%X ",vncbuffer[x]);
+    //chprintf((BaseSequentialStream*)&SD4,"\r\n");
     x = lwip_send(vncsocket,&vncbuffer,16,0);
     if (x != 16)
 	log_data("set Encodings Incorrect length\r\n");
@@ -688,11 +688,11 @@ static THD_FUNCTION(VncThread, arg) {
 	socklen_t fromlen;
 
 	chRegSetThreadName("EchoServerThread");
-	chprintf((BaseSequentialStream*)&SD3,"Shell Server Starting \r\n");
+	chprintf((BaseSequentialStream*)&SD4,"Shell Server Starting \r\n");
 
 	vncsocket = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
 	if (vncsocket == -1) {
-	    chprintf((BaseSequentialStream*)&SD3,"Closing A - no socket \r\n");
+	    chprintf((BaseSequentialStream*)&SD4,"Closing A - no socket \r\n");
 
 		return MSG_RESET;
 	}
@@ -703,17 +703,17 @@ static THD_FUNCTION(VncThread, arg) {
 	sa.sin_addr.s_addr = inet_addr(SOCK_TARGET_HOST);
 	fromlen = sizeof(sa);
 	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
-	chprintf((BaseSequentialStream*)&SD3,"Returned '%d' \r\n",ret);
+	chprintf((BaseSequentialStream*)&SD4,"Returned '%d' \r\n",ret);
 	connect_vnc();
 	//chThdSleepMilliseconds(5000);
-	framebuffer_request(0,0,320,240,0);
+	framebuffer_request(0,0,800,480,0);
 	while (TRUE)
 	    {
 		log_data("****************************************\r\n");
 		//read_all_data("getting ready to read");
-		chprintf((BaseSequentialStream*)&SD3,".");
+		chprintf((BaseSequentialStream*)&SD4,".");
 		//chThdSleepMilliseconds(10);
-		framebuffer_request(0,0,320,240,1);
+		framebuffer_request(0,0,800,480,1);
 		pass ++;
 		if (pass%2 ==0)
 		    {
@@ -744,11 +744,11 @@ static THD_FUNCTION(EchoServerThread, arg) {
 	socklen_t fromlen;
 
 	chRegSetThreadName("EchoServerThread");
-	chprintf((BaseSequentialStream*)&SD3,"Shell Server Starting \r\n");
+	chprintf((BaseSequentialStream*)&SD4,"Shell Server Starting \r\n");
 
 	sock = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
 	if (sock == -1) {
-	    chprintf((BaseSequentialStream*)&SD3,"Closing A - no socket \r\n");
+	    chprintf((BaseSequentialStream*)&SD4,"Closing A - no socket \r\n");
 
 		return MSG_RESET;
 	}
@@ -760,7 +760,7 @@ static THD_FUNCTION(EchoServerThread, arg) {
 	fromlen = sizeof(sa);
 
 	if (lwip_bind(sock, (struct sockaddr *) &sa, sizeof(sa)) == -1) {
-	    chprintf((BaseSequentialStream*)&SD3,"Closing B - no BIND \r\n");
+	    chprintf((BaseSequentialStream*)&SD4,"Closing B - no BIND \r\n");
 		lwip_close(sock);
 		return MSG_RESET;
 	}
@@ -770,19 +770,19 @@ static THD_FUNCTION(EchoServerThread, arg) {
 	}
 
 	while (!chThdShouldTerminateX()) {
-	    chprintf((BaseSequentialStream*)&SD3,"Attempting to rx\r\n");
+	    chprintf((BaseSequentialStream*)&SD4,"Attempting to rx\r\n");
 	    newsockfd = lwip_accept(sock, (struct sockaddr *) &cli_addr,
 				    &cli_addr_len);
 	    if (newsockfd < 0) {
 		break;
 	    }
-	    chprintf((BaseSequentialStream*)&SD3,"Accepted\r\n");
+	    chprintf((BaseSequentialStream*)&SD4,"Accepted\r\n");
 	    chThdSleepMilliseconds(100);
 	    while (!chThdShouldTerminateX()) {
 
 		recsize = lwip_recvfrom(newsockfd, buffer, sizeof(buffer), 0,
 				(struct sockaddr *) &sa, &fromlen);
-		chprintf((BaseSequentialStream*)&SD3,"recsize %d - fromlen %d\r\n",recsize,fromlen);
+		chprintf((BaseSequentialStream*)&SD4,"recsize %d - fromlen %d\r\n",recsize,fromlen);
 		if (recsize < 0) {
 			break;
 		}
@@ -825,7 +825,7 @@ static THD_FUNCTION(ShellServerThread, arg) {
 	thread_t *shelltp;
 
 	chRegSetThreadName("ShellServerThread");
-	chprintf((BaseSequentialStream*)&SD3,"Shell Server Starting \r\n");
+	chprintf((BaseSequentialStream*)&SD4,"Shell Server Starting \r\n");
 
 	memset(&serv_addr, 0, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
@@ -884,7 +884,7 @@ static THD_FUNCTION(ShellServerThread2, arg) {
 
 	chRegSetThreadName("ShellServerThread2");
 
-	shell_cfg.sc_channel = (BaseSequentialStream*) &SD3;
+	shell_cfg.sc_channel = (BaseSequentialStream*) &SD4;
 	shell_cfg.sc_commands = shell_commands;
 
 	shelltp = shellCreate(&shell_cfg, SHELL_WA_SIZE, NORMALPRIO+2);
@@ -901,7 +901,7 @@ static void ppp_linkstatus_callback(void *ctx, int errCode, void *arg) {
 	(void) arg;
 
 	volatile int *connected = (int*)ctx;
-	chprintf((BaseSequentialStream*)&SD3,"callback %x\r\n",errCode);
+	chprintf((BaseSequentialStream*)&SD4,"callback %x\r\n",errCode);
 	chThdSleepMilliseconds(100);
 
 	if (errCode == PPPERR_NONE) {
@@ -937,17 +937,17 @@ int main(void) {
   /*
    * SPI1 I/O pins setup.
    */
-  palSetPadMode(GPIOB, 6, PAL_MODE_ALTERNATE(7));    
-  palSetPadMode(GPIOB, 7, PAL_MODE_ALTERNATE(7));
-  palSetPadMode(GPIOB, 10, PAL_MODE_ALTERNATE(7));    
-  palSetPadMode(GPIOB, 11, PAL_MODE_ALTERNATE(7));
+  palSetPadMode(GPIOA, 9, PAL_MODE_ALTERNATE(7));    
+  palSetPadMode(GPIOA, 10, PAL_MODE_ALTERNATE(7));
+  palSetPadMode(GPIOA, 0, PAL_MODE_ALTERNATE(8));    
+  palSetPadMode(GPIOA, 1, PAL_MODE_ALTERNATE(8));
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN | RCC_AHB1ENR_GPIOCEN |
       RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOEEN | RCC_AHB1ENR_GPIOFEN |
       RCC_AHB1ENR_GPIOGEN;
 
-  chMtxObjectInit(&SD3mtx);
+  //  chMtxObjectInit(&SD4mtx);
   sdStart(&SD1, &uartCfg);
-  sdStart(&SD3, &uartCfg);
+  sdStart(&SD4, &uartCfg);
 
   palSetPadMode(GPIOG, 13, PAL_MODE_OUTPUT_PUSHPULL); 
   palSetPadMode(GPIOG, 14, PAL_MODE_OUTPUT_PUSHPULL );
@@ -960,45 +960,45 @@ int main(void) {
 
   //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
   //  *(uint16_t *)i = 0x0700;
-  fill_rect2(0x0000,0,0,800,480);
-  fill_rect2(0x0700,200,100,100,100);
-  fill_rect2(0x001f,200,200,100,100);
-  fill_rect2(0xf000,100,100,100,100);
+  fill_rect(0x0000,0,0,800,480);
+  fill_rect(0x0700,200,100,100,100);
+  fill_rect(0x001f,200,200,100,100);
+  fill_rect(0xf000,100,100,100,100);
 
 
 
 
 
   printf("test from printf \r\n");
-  chprintf((BaseSequentialStream*)&SD3,"After start thread\r\n");
+  chprintf((BaseSequentialStream*)&SD4,"After start thread\r\n");
   chThdSleepMilliseconds(100);
 
 
   palSetPad(GPIOG, 14);
 
-  chprintf((BaseSequentialStream*)&SD3,"After set pad Init\r\n");
+  chprintf((BaseSequentialStream*)&SD4,"After set pad Init\r\n");
   chThdSleepMilliseconds(100);
 
 
   tcpip_init(NULL, NULL);
-  chprintf((BaseSequentialStream*)&SD3,"After tcp Init\r\n");
+  chprintf((BaseSequentialStream*)&SD4,"After tcp Init\r\n");
   chThdSleepMilliseconds(100);
 
 
 
   pppInit();
-  chprintf((BaseSequentialStream*)&SD3,"After PPP Init\r\n");
+  chprintf((BaseSequentialStream*)&SD4,"After PPP Init\r\n");
   chThdSleepMilliseconds(100);
 
 
 
 
   shellInit();
-  chprintf((BaseSequentialStream*)&SD3,"After Shell Init\r\n");
+  chprintf((BaseSequentialStream*)&SD4,"After Shell Init\r\n");
   chThdSleepMilliseconds(100);
   chThdSetPriority(PPP_THREAD_PRIO + 1);
 
-  chprintf((BaseSequentialStream*)&SD3,"After set Priority\r\n");
+  chprintf((BaseSequentialStream*)&SD4,"After set Priority\r\n");
   chThdSleepMilliseconds(100);
 
 	while (TRUE) {
@@ -1011,7 +1011,7 @@ int main(void) {
 			chThdSleep(MS2ST(100));
 			continue;
 		}
-		chprintf((BaseSequentialStream*)&SD3,"After ppp open\r\n");
+		chprintf((BaseSequentialStream*)&SD4,"After ppp open\r\n");
 		chThdSleepMilliseconds(100);
 
 
@@ -1021,7 +1021,7 @@ int main(void) {
 		while (connected < 1) {
 			chThdSleep(MS2ST(500));
 			if(timeout++ > 10) {  // If we waited too long restart connection
-			    chprintf((BaseSequentialStream*)&SD3,"Close Connection - too long\r\n");
+			    chprintf((BaseSequentialStream*)&SD4,"Close Connection - too long\r\n");
 			    chThdSleepMilliseconds(100);
 
 				pppClose(pd);
@@ -1029,14 +1029,14 @@ int main(void) {
 			}
 			
 		}
-		chprintf((BaseSequentialStream*)&SD3,"entering connection \r\n");
+		chprintf((BaseSequentialStream*)&SD4,"entering connection \r\n");
 
 		// Make sure connection is stable
 		while (connected < 5) {
 			chThdSleep(MS2ST(100));
 			printf("Connected\r\n");
 			if (connected == 0) { // reset by pppThread while waiting for stable connection
-			    chprintf((BaseSequentialStream*)&SD3,"Close Connection - not stable\r\n");
+			    chprintf((BaseSequentialStream*)&SD4,"Close Connection - not stable\r\n");
 			    chThdSleepMilliseconds(100);
 
 				pppClose(pd);
