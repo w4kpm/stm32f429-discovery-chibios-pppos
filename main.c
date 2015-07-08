@@ -15,10 +15,10 @@
 */
 
 
-#include "lwip/sockets.h"
+//#include "lwip/sockets.h"
 #include "lwip/tcpip.h"
 
-#include "socketstreams.h"
+//#include "socketstreams.h"
 
 #include "ch.h"
 #include "hal.h"
@@ -29,15 +29,25 @@
 #include "shell.h"
 #include "sysinfo.h"
 #include "sdram.h"
-#include "lwip/sockets.h"
+//#include "lwip/sockets.h"
 #include <string.h>
 #include "ppp/ppp.h"
 #include "stm32f4xx.h"
-
+mutex_t SD4mtx;
 //#include "lwipthread.h"
+
+#define PKT_BUFFER_START 0xD0100000
+#define PKT_BUFFER_LEN   0x00100000
+uint8_t *bufferstart;
+uint8_t *bufferend;
+uint16_t numbytes;
+
 static uint8_t txbuf[2];
 static uint8_t rxbuf[2];
 static char text[255];
+struct tcp_pcb *gpcb;
+int tcp_connected;
+int tcp_sent_data;
 static const SPIConfig std_spicfg1 = {
   NULL,
   GPIOC,                                                        /*port of CS  */
@@ -181,7 +191,7 @@ void log_data_num(char* text,int data)
 }
 
 
-void ensure_bytes(uint16_t numbytes)
+void ensure_bytes(uint16_t numb)
 {
     // I had problems with recv not returning the number of bytes that 
     // I requested - I am assuming that recv also returns when it hits the 
@@ -193,14 +203,14 @@ void ensure_bytes(uint16_t numbytes)
     uint8_t *buffpos;
 
     readbytes =0;
-    neededbytes = numbytes;
+    neededbytes = numb;
     buffpos = &vncbuffer;
-    while (readbytes < numbytes)
+    while (readbytes < numb)
 	{
 	    //chThdSleepMilliseconds(10);
 	    //log_data_num("we need %d \r\n",neededbytes);
 	    //log_data_num("we have %d \r\n",readbytes);
-	    currentbytes=lwip_recv(vncsocket,(uint8_t *)buffpos+readbytes,neededbytes,0);
+	    currentbytes=rx((uint8_t *)buffpos+readbytes,neededbytes);
 	    if (currentbytes < 0)
 		{
 		    log_data_num("we got an error reading %d \r\n",currentbytes);
@@ -215,43 +225,9 @@ void ensure_bytes(uint16_t numbytes)
 
 
 
-void write_byte(uint8_t x){
-    int numbytes;
-    numbytes=lwip_send(vncsocket,&x,1,0);
-    if (numbytes != 1)
-	log_data("writeByte Incorrect length\r\n");
-}
-
-void write_string(char *str)
-{
-    int numbytes;
-    numbytes=lwip_send(vncsocket,str,strlen(str),0);
-    if (numbytes != strlen(str))
-	log_data("writeString Incorrect length\r\n");
-
-}
-
-void write_16(uint16_t data)
-{
-    int numbytes;
-    numbytes=lwip_send(vncsocket,&data,2,0);
-    if (numbytes != 2)
-	log_data("write16 Incorrect length\r\n");
-}
 
 
 
-
-
-
-void write_32(uint32_t data)
-{
-    int numbytes;
-    numbytes=lwip_send(vncsocket,&data,4,0);
-    if (numbytes != 4)
-	log_data("write32 Incorrect length\r\n");
-
-}
 
 
 
@@ -272,7 +248,7 @@ uint8_t read_8(void)
     uint8_t data;
     int numbytes;
     data = 0;
-    numbytes=lwip_recv(vncsocket,&data,1,0);
+    numbytes=rx(&data,1);
     if (numbytes != 1)
 	log_data_num("read_8 Incorrect length\r\n",numbytes);
     return data;
@@ -324,22 +300,22 @@ void set_32(uint8_t *buffer, uint32_t data)
 
 
 
-void read_all_data(char* str)
+void read_all_data(char* str,uint16_t len)
 {
     /* reads all bytes left in queue - NB - it looks like lwip breaks 
        at the end of each remote transition, so even though this completes, 
        there may be another packet waiting */
     int x;
-    int numbytes;
-    numbytes=lwip_recv(vncsocket,&vncbuffer,1024,MSG_PEEK|MSG_DONTWAIT);
-    if (numbytes ==0)
+    int numread;
+
+    if (numbytes < len)
 	{
-	    chprintf((BaseSequentialStream*)&SD4,"%s: No Data\r\n",str);
+	    chprintf((BaseSequentialStream*)&SD4,"only %d bytes - will block \r\n",numbytes);
 	    return;
 	}
-    numbytes=lwip_recv(vncsocket,&vncbuffer,1024,0);
+    numread=rx(&vncbuffer,len);
     chprintf((BaseSequentialStream*)&SD4,"%s Data Dump:\r\n    ",str);
-    for (x=0;x<numbytes;x++)
+    for (x=0;x<numread;x++)
 	chprintf((BaseSequentialStream*)&SD4,"0x%X ",vncbuffer[x]);
     chprintf((BaseSequentialStream*)&SD4,"\r\n");
 
@@ -392,11 +368,23 @@ uint32_t hextile_fg_color;
     //log_data(text);
 //}
 
-void fill_rect(uint32_t color, int x, int y, int width, int height) 
+
+uint32_t translate_color(uint32_t color)
+{
+    uint32_t newcolor;
+    newcolor = color &0x000000ff >> 3;
+    newcolor |= color & 0x0000fc00 >> 5;
+    newcolor |= color & 0x00f80000 >> 8;
+    return newcolor;
+}
+void fill_rect(uint32_t color, int x, int y, int width, int height,int xlate) 
 {
     DMA2D->CR = 3 << 16;
     DMA2D->OPFCCR = 0x2;
-    DMA2D->OCOLR = color;
+    if (xlate ==0)
+	DMA2D->OCOLR = color;
+    else
+	DMA2D->OCOLR = translate_color(color);
   
     DMA2D->OMAR = 0xD0000000 + (800 * y *2) + x*2;
     DMA2D->OOR = LCD_WIDTH - width;
@@ -425,7 +413,7 @@ void process_colored_rects(int rectCount, int startX, int startY)
 	    x = (xy & 0xf0) >> 4;
 	    h = wh & 0xf;
 	    w = (wh & 0xf0) >> 4;
-	    fill_rect(currentcolor,startX + x,startY+y,w+1,h+1);
+	    fill_rect(currentcolor,startX + x,startY+y,w+1,h+1,1);
 	}
 }
 	    
@@ -445,7 +433,7 @@ void process_foreground_rects(uint32_t fgcolor,int rectCount, int startX, int st
 	    x = (xy & 0xf0) >> 4;
 	    h = wh & 0xf;
 	    w = (wh & 0xf0) >> 4;
-	    fill_rect(fgcolor,startX + x,startY+y,w+1,h+1);
+	    fill_rect(fgcolor,startX + x,startY+y,w+1,h+1,1);
 	}
 }
 	    
@@ -499,7 +487,7 @@ void read_hextile_rect(int x,int y, int width, int height)
 				//log_data_num("subrec Count %d\r\n",subrect_count);
 			    }
 			// fill bg rect here 
-		        fill_rect(hextile_bg_color,x2*16+x,y2*16+y,newwidth,newheight);
+		        fill_rect(hextile_bg_color,x2*16+x,y2*16+y,newwidth,newheight,1);
 			//  I think these are mutually exclusive.
 			if (coloredrects)
 			    process_colored_rects(subrect_count,x2*16+x,y2*16+y);
@@ -593,7 +581,7 @@ void read_pixel_format_data(void)
     log_data_num("red-shift: %d\r\n",read_8()); 
     log_data_num("green-shift: %d\r\n",read_8()); 
     log_data_num("blue-shift: %d\r\n",read_8());
-    lwip_recv(vncsocket,&vncbuffer,3,0); // per the protocol, there is 
+    rx(&vncbuffer,3); // per the protocol, there is 
                                          // three bytes of padding
     strLength= read_32();
     ensure_bytes(strLength);
@@ -625,9 +613,9 @@ void framebuffer_request(uint16_t x,
     set_16(vncbuffer+6,width);
     set_16(vncbuffer+8,height);
 
-    len = lwip_send(vncsocket,&vncbuffer,10,0);
+    len = send(&vncbuffer,10);
     if (len != 10)
-	log_data("set Encodings Incorrect length\r\n");
+	log_data("framebuffer Incorrect length\r\n");
     process_frame_response();
 }
 
@@ -651,24 +639,124 @@ void set_encodings()
     //for (x=0;x<16;x++)
     //	chprintf((BaseSequentialStream*)&SD4,"0x%X ",vncbuffer[x]);
     //chprintf((BaseSequentialStream*)&SD4,"\r\n");
-    x = lwip_send(vncsocket,&vncbuffer,16,0);
+    x = send(&vncbuffer,16);
     if (x != 16)
 	log_data("set Encodings Incorrect length\r\n");
 	
 
 }
 
-int connect_vnc(void){
-    write_string("RFB 003.003\n");
+char tcpbuff[255];
 
-    write_byte(1); // Share flag - we allow sharing
 
-    set_encodings();
-    read_all_data("Server Response");
-    read_all_data("Security Code");
-    read_pixel_format_data();    
+uint8_t *tcpipbuffer;
+
+
+
+int send(uint8_t *buffer,int len)
+{
+    err_t err;
+    tcp_sent_data = 0;
+    err = tcp_write(gpcb,buffer,len,0);
+    if (err == ERR_OK)
+	err=0;
+	//chprintf((BaseSequentialStream*)&SD4,"tcp_write= OK\r\n");
+    else
+	chprintf((BaseSequentialStream*)&SD4,"tcp_write= %d\r\n",err);
+    while (tcp_sent_data ==0)
+	{
+	    //	    chprintf((BaseSequentialStream*)&SD4,"o");
+	    chThdSleepMilliseconds(1);
+
+	    
+	}
+    return len;
 }
 
+int rx(uint8_t* buffer,int len)
+{
+    int retval;
+    retval = len;
+    // block forever
+    while (numbytes < len)
+	{
+	    //chprintf((BaseSequentialStream*)&SD4,"x");
+
+	    chThdSleepMilliseconds(1);
+	}
+    memcpy(buffer,bufferstart,len);
+    bufferstart += len;
+    numbytes -= len;
+    if (bufferstart == bufferend)
+	{
+	    bufferstart = bufferend = PKT_BUFFER_START;
+	}
+    return retval;
+}
+
+
+int connect_vnc(void){
+
+    err_t err;
+    read_all_data("Server Response",12);
+    sprintf(tcpbuff,"RFB 003.003\n"); // send the version we would like to get 
+    send(tcpbuff,12);
+    tcpbuff[0] = 1;
+    send(tcpbuff,1); // share flag - allow sharing
+    read_all_data("Security Code",4);    
+    read_pixel_format_data();    
+    set_encodings();
+
+
+
+}
+
+err_t tcp_recv_callback(void* arg, struct tcp_pcb *tpcb,struct pbuf *p,err_t err)
+ {
+     int x;
+     struct pbuf *initp;
+     int total_rx = 0;
+     initp = p;
+     while (p != NULL)
+	 {
+	     //chprintf((BaseSequentialStream*)&SD4,"pbuf(%x) RX %d (total = %d) bytes - next Pbuf = %X bufferend =%X numbytes =%d \r\n",p,p->len,p->tot_len,p->next,bufferend,numbytes);
+	     memcpy(bufferend,p->payload,p->len);
+	     bufferend += p->len;
+	     numbytes += p->len;
+	     total_rx += p->len;
+	     p = p->next;	  
+	 }
+     pbuf_free(initp);
+     tcp_recved(gpcb,total_rx);
+     return ERR_OK;
+ }
+
+
+
+ err_t tcp_connect_callback(void* arg, struct tcp_pcb *tpcb,err_t err)
+ {
+     chprintf((BaseSequentialStream*)&SD4,"got to callback \r\n");
+     if (err == ERR_OK)
+	 {
+	     tcp_connected = 1;
+	     chprintf((BaseSequentialStream*)&SD4,"Connected!\r\n");
+	 }
+     else
+	 {
+	     chprintf((BaseSequentialStream*)&SD4,"connection error: %x\r\n",err);
+	 }
+     return ERR_OK;
+
+}
+
+err_t tcp_sent_callback(void *arg,
+		       struct tcp_pcb *tpcb,
+		       u16_t len)
+{
+    //chprintf((BaseSequentialStream*)&SD4,"sent: %d bytes\r\n",len);  
+    tcp_sent_data = 1;
+    return ERR_OK;
+}
 
 
 
@@ -679,56 +767,72 @@ static THD_FUNCTION(VncThread, arg) {
 	int ret;
 	int pass;
 	int x;
-	struct sockaddr_in sa;
+	struct ip_addr dest;
+	err_t error;
+
+	tcp_connected = 0;
+	bufferstart = PKT_BUFFER_START;
+	bufferend = PKT_BUFFER_START;
+	numbytes = 0;
+
+	IP4_ADDR(&dest, 172, 30, 1, 98);
+	//	struct sockaddr_in sa;
 
 	int recsize;
-	socklen_t cli_addr_len;
-	struct sockaddr_in cli_addr;
+	//	socklen_t cli_addr_len;
+	//	struct sockaddr_in cli_addr;
 
-	socklen_t fromlen;
+	//	socklen_t fromlen;
 
-	chRegSetThreadName("EchoServerThread");
-	chprintf((BaseSequentialStream*)&SD4,"Shell Server Starting \r\n");
+	chRegSetThreadName("VncThread");
+	chprintf((BaseSequentialStream*)&SD4,"VNC Client Starting \r\n");
 
-	vncsocket = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
-	if (vncsocket == -1) {
-	    chprintf((BaseSequentialStream*)&SD4,"Closing A - no socket \r\n");
+	gpcb = tcp_new();	
+	tcp_sent(gpcb,tcp_sent_callback);
+	tcp_recv(gpcb,tcp_recv_callback);
+	error = tcp_connect(gpcb,&dest,SOCK_TARGET_PORT,tcp_connect_callback);
 
-		return MSG_RESET;
-	}
+	if (error != ERR_OK)
+	    chprintf((BaseSequentialStream*)&SD4,"error colling connect %d \r\n",error);
+	else
+	    chprintf((BaseSequentialStream*)&SD4,"tcp_connect OK \r\n");
+	while (tcp_connected == 0)
+	    {
+		chprintf((BaseSequentialStream*)&SD4,"-");
+		chThdSleepMilliseconds(100);
+	    }
+	    
 
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_family = AF_INET;
-	sa.sin_port = PP_HTONS(SOCK_TARGET_PORT);
-	sa.sin_addr.s_addr = inet_addr(SOCK_TARGET_HOST);
-	fromlen = sizeof(sa);
-	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
-	chprintf((BaseSequentialStream*)&SD4,"Returned '%d' \r\n",ret);
+	//	vncsocket = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
+	//if (vncsocket == -1) {
+	//    chprintf((BaseSequentialStream*)&SD4,"Closing A - no socket \r\n");
+
+	//		return MSG_RESET;
+	//	}
+
+	//	memset(&sa, 0, sizeof(sa));
+//	sa.sin_family = AF_INET;
+//	sa.sin_port = PP_HTONS(SOCK_TARGET_PORT);
+//	sa.sin_addr.s_addr = inet_addr(SOCK_TARGET_HOST);
+//	fromlen = sizeof(sa);
+//	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
+//	chprintf((BaseSequentialStream*)&SD4,"Returned '%d' \r\n",ret);
 	connect_vnc();
 	//chThdSleepMilliseconds(5000);
-	framebuffer_request(0,0,800,480,0);
+		framebuffer_request(0,0,800,480,0);
 	while (TRUE)
 	    {
-		log_data("****************************************\r\n");
-		//read_all_data("getting ready to read");
-		chprintf((BaseSequentialStream*)&SD4,".");
-		//chThdSleepMilliseconds(10);
+//		log_data("****************************************\r\n");
+//		//read_all_data("getting ready to read");
+		//chprintf((BaseSequentialStream*)&SD4,".");
+		//chThdSleepMilliseconds(1000);
 		framebuffer_request(0,0,800,480,1);
-		pass ++;
-		if (pass%2 ==0)
-		    {
-			palClearPad(GPIOG, 14);
-		    }
-		else
-		    {
-			palSetPad(GPIOG, 14);
-		    }
 
 	    }
 	
 }
 
-
+/*
 static THD_WORKING_AREA(waEchoServerThread, 2048 );
 static THD_FUNCTION(EchoServerThread, arg) {
 	(void) arg;
@@ -807,11 +911,11 @@ static THD_FUNCTION(EchoServerThread, arg) {
 	return MSG_OK;
 }
 
-
+*/
 /*
  * TCP Shell server thread
  */
-
+/*
 static THD_WORKING_AREA(waShellServerThread, 512);
 static THD_FUNCTION(ShellServerThread, arg) {
 	(void) arg;
@@ -820,7 +924,7 @@ static THD_FUNCTION(ShellServerThread, arg) {
 	socklen_t cli_addr_len;
 	struct sockaddr_in serv_addr, cli_addr;
 
-	SocketStream sbp;
+	//	SocketStream sbp;
 	ShellConfig shell_cfg;
 	thread_t *shelltp;
 
@@ -873,7 +977,7 @@ static THD_FUNCTION(ShellServerThread, arg) {
 	return MSG_OK;
 }
 
-
+*/
 static THD_WORKING_AREA(waShellServerThread2, 512);
 static THD_FUNCTION(ShellServerThread2, arg) {
 	(void) arg;
@@ -912,6 +1016,9 @@ static void ppp_linkstatus_callback(void *ctx, int errCode, void *arg) {
 }
 
 
+
+
+
 uint32_t Current_color;
 
 
@@ -945,7 +1052,7 @@ int main(void) {
       RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOEEN | RCC_AHB1ENR_GPIOFEN |
       RCC_AHB1ENR_GPIOGEN;
 
-  //  chMtxObjectInit(&SD4mtx);
+  chMtxObjectInit(&SD4mtx);
   sdStart(&SD1, &uartCfg);
   sdStart(&SD4, &uartCfg);
 
@@ -955,15 +1062,16 @@ int main(void) {
   RCC->AHB1ENR |= RCC_AHB1ENR_DMA2DEN;
 
   SDRAM_Init();
+  
   TFTLCD_Init();
   //  chThdSleepMilliseconds(1000);
 
   //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
   //  *(uint16_t *)i = 0x0700;
-  fill_rect(0x0000,0,0,800,480);
-  fill_rect(0x0700,200,100,100,100);
-  fill_rect(0x001f,200,200,100,100);
-  fill_rect(0xf000,100,100,100,100);
+  fill_rect(0x0000,0,0,800,480,0);
+  fill_rect(0x0700,200,100,100,100,0);
+  fill_rect(0x001f,200,200,100,100,0);
+  fill_rect(0xf000,100,100,100,100,0);
 
 
 
@@ -1067,8 +1175,8 @@ int main(void) {
 		// Tear down threads
 		chThdTerminate(echoServerThread);
 		chThdWait(echoServerThread);
-		chThdTerminate(shellServerThread);
-		chThdWait(shellServerThread);
+		//		chThdTerminate(shellServerThread);
+		//chThdWait(shellServerThread);
 	}
 
   return 0;
