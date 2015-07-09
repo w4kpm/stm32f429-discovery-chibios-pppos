@@ -186,7 +186,7 @@ void log_data(char* text)
 
 void log_data_num(char* text,int data)
 {
-    return;
+
     chprintf((BaseSequentialStream*)&SD4,text,data);
 }
 
@@ -339,7 +339,7 @@ void read_raw_rect(int x,int y, int w, int h)
 {
     int bytecount;
     char text[255];
-    //log_data_num("reading %d bytes\r\n",(w * h * 4));
+    log_data_num("Raw Rect: reading %d bytes\r\n",(w * h * 4));
     ensure_bytes((w * h * 4));
 	
 }
@@ -371,10 +371,12 @@ uint32_t hextile_fg_color;
 
 uint32_t translate_color(uint32_t color)
 {
+    // color as delivered is backwards from what we expect - 
+    // so we translate - hopefully I can change this sometime
     uint32_t newcolor;
-    newcolor = color &0x000000ff >> 3;
-    newcolor |= color & 0x0000fc00 >> 5;
-    newcolor |= color & 0x00f80000 >> 8;
+    newcolor = (color &  0x0000f800) ;
+    newcolor |= ((color & 0x00fc0000) >> 13);
+    newcolor |= ((color & 0xf8000000) >> 27);
     return newcolor;
 }
 void fill_rect(uint32_t color, int x, int y, int width, int height,int xlate) 
@@ -1069,9 +1071,17 @@ int main(void) {
   //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
   //  *(uint16_t *)i = 0x0700;
   fill_rect(0x0000,0,0,800,480,0);
+
+  fill_rect(0xffff,100,200,100,100,0);
   fill_rect(0x0700,200,100,100,100,0);
   fill_rect(0x001f,200,200,100,100,0);
   fill_rect(0xf000,100,100,100,100,0);
+
+
+  fill_rect(0xffffff,300,200,100,100,1);
+  fill_rect(0xff0000,400,100,100,100,1);
+  fill_rect(0x00ff00,400,200,100,100,1);
+  fill_rect(0x0000ff,300,100,100,100,1);
 
 
 
