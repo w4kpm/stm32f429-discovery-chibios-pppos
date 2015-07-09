@@ -36,6 +36,13 @@
 mutex_t SD4mtx;
 //#include "lwipthread.h"
 
+#define TFT_COPY_BUFFER_START 0xD0200000
+#define TFT_BUFFER_START 0xD0000000
+#define TFT_BUFFER_WIDTH 800
+#define TFT_BUFFER_HEIGHT 480
+#define TFT_PIXEL_SIZE 2
+
+
 #define PKT_BUFFER_START 0xD0100000
 #define PKT_BUFFER_LEN   0x00100000
 uint8_t *bufferstart;
@@ -123,8 +130,6 @@ u32_t sys_jiffies(void) {
 }
 
 
-#define LCD_WIDTH	 800
-#define LCD_HEIGHT	480
 
 static SerialConfig uartCfg =
 {
@@ -180,7 +185,7 @@ int vncsocket;
 
 void log_data(char* text)
 {
-    return;
+
     chprintf((BaseSequentialStream*)&SD4,text);
 }
 
@@ -298,6 +303,18 @@ void set_32(uint8_t *buffer, uint32_t data)
 
 
 
+uint32_t translate_color(uint32_t color)
+{
+    // color as delivered is backwards from what we expect - 
+    // so we translate - hopefully I can change this sometime
+    uint32_t newcolor;
+    newcolor = (color &  0x0000f800) ;
+    newcolor |= ((color & 0x00fc0000) >> 13);
+    newcolor |= ((color & 0xf8000000) >> 27);
+    return newcolor;
+}
+
+
 
 
 void read_all_data(char* str,uint16_t len)
@@ -330,8 +347,47 @@ void read_copy_rect(int xpos, int ypos, int width, int height)
     char text[255];
     sourcex = read_16();
     sourcey = read_16();
-    //sprintf(text,"copy-rect. source %d,%d dest: %d,%d size:%d,%d\r\n",sourcex,sourcey,xpos,ypos,height,width);
+    //    sprintf(text,"copy-rect. source %d,%d dest: %d,%d size:%d,%d\r\n",sourcex,sourcey,xpos,ypos,height,width);
     //log_data(text);
+
+    // we copy twice - once to a copy buffer - then from the copy buffer back to the live buffer
+    // this is because it was causing problems with the DMA - it would copy to portions that 
+    // still had not been copied yet.  - it's actually pretty fast.
+
+    DMA2D->CR = 0; // mode =  memory to memory
+    DMA2D->OPFCCR = 0x2; // set rgb565 mode
+    DMA2D->FGPFCCR = 0x2; // set rgb565 mode
+  
+    DMA2D->OMAR = TFT_COPY_BUFFER_START + (TFT_BUFFER_WIDTH * sourcey * TFT_PIXEL_SIZE) + sourcex* TFT_PIXEL_SIZE; // memory start 
+    DMA2D->OOR = TFT_BUFFER_WIDTH - width;  // output offset (determines offset of next line)
+
+    DMA2D->FGMAR = TFT_BUFFER_START + (TFT_BUFFER_WIDTH * sourcey *TFT_PIXEL_SIZE) + sourcex*TFT_PIXEL_SIZE; // memory start 
+    DMA2D->FGOR = TFT_BUFFER_WIDTH - width;  // output offset (determines offset of next line)
+
+
+    DMA2D->NLR = (uint32_t) ((width << 16) | height); //width and height 
+    DMA2D->CR |= 1;  // start operation
+    while (DMA2D->CR & DMA2D_CR_START) {
+    }
+
+
+    DMA2D->CR = 0; // mode =  memory to memory
+    DMA2D->OPFCCR = 0x2; // set rgb565 mode
+    DMA2D->FGPFCCR = 0x2; // set rgb565 mode
+  
+    DMA2D->OMAR = TFT_BUFFER_START + (TFT_BUFFER_WIDTH * ypos * TFT_PIXEL_SIZE) + xpos* TFT_PIXEL_SIZE; // memory start 
+    DMA2D->OOR = TFT_BUFFER_WIDTH - width;  // output offset (determines offset of next line)
+
+    DMA2D->FGMAR = TFT_COPY_BUFFER_START + (TFT_BUFFER_WIDTH * sourcey *TFT_PIXEL_SIZE) + sourcex*TFT_PIXEL_SIZE; // memory start 
+    DMA2D->FGOR = TFT_BUFFER_WIDTH - width;  // output offset (determines offset of next line)
+
+
+    DMA2D->NLR = (uint32_t) ((width << 16) | height); //width and height 
+    DMA2D->CR |= 1;  // start operation
+    while (DMA2D->CR & DMA2D_CR_START) {
+    }
+
+
 }
 
 
@@ -339,8 +395,18 @@ void read_raw_rect(int x,int y, int w, int h)
 {
     int bytecount;
     char text[255];
-    log_data_num("Raw Rect: reading %d bytes\r\n",(w * h * 4));
+    uint32_t incoming_pixel;
+    uint16_t pixel;
+    int q,r;
+    //log_data_num("Raw Rect: reading %d bytes\r\n",(w * h * 4));
     ensure_bytes((w * h * 4));
+    for (q = 0; q<w; q++)
+	for(r=0;r<h; r++)
+	    {
+		incoming_pixel = *(uint32_t*)(vncbuffer+((r*w+q)*4));
+		pixel=translate_color(incoming_pixel);
+		*(uint16_t*) (TFT_BUFFER_START + (((y+r)*TFT_BUFFER_WIDTH)+x+q)*TFT_PIXEL_SIZE) = pixel &0xffff;
+	    }
 	
 }
 
@@ -361,37 +427,21 @@ uint8_t clipit (int currentpos, int maxpos)
 // I made them global just in case.
 uint32_t hextile_bg_color;
 uint32_t hextile_fg_color;
-//void fill_rect(uint32_t color, int x, int y, int width, int height)
-//{
-//    char text[255];
-    //sprintf(text,"Fill Rect %X pos:%d,%d size:%d,%d\r\n",color,x,y,height,width);
-    //log_data(text);
-//}
 
 
-uint32_t translate_color(uint32_t color)
-{
-    // color as delivered is backwards from what we expect - 
-    // so we translate - hopefully I can change this sometime
-    uint32_t newcolor;
-    newcolor = (color &  0x0000f800) ;
-    newcolor |= ((color & 0x00fc0000) >> 13);
-    newcolor |= ((color & 0xf8000000) >> 27);
-    return newcolor;
-}
 void fill_rect(uint32_t color, int x, int y, int width, int height,int xlate) 
 {
-    DMA2D->CR = 3 << 16;
-    DMA2D->OPFCCR = 0x2;
+    DMA2D->CR = 3 << 16; // mode =  register to memory
+    DMA2D->OPFCCR = 0x2; // set rgb565 mode
     if (xlate ==0)
 	DMA2D->OCOLR = color;
     else
 	DMA2D->OCOLR = translate_color(color);
   
-    DMA2D->OMAR = 0xD0000000 + (800 * y *2) + x*2;
-    DMA2D->OOR = LCD_WIDTH - width;
-    DMA2D->NLR = (uint32_t) ((width << 16) | height);
-    DMA2D->CR |= 1;
+    DMA2D->OMAR = TFT_BUFFER_START + (TFT_BUFFER_WIDTH * y *TFT_PIXEL_SIZE) + x*TFT_PIXEL_SIZE; // memory start 
+    DMA2D->OOR = TFT_BUFFER_WIDTH - width;  // output offset (determines offset of next line)
+    DMA2D->NLR = (uint32_t) ((width << 16) | height); //width and height 
+    DMA2D->CR |= 1;  // start operation
     while (DMA2D->CR & DMA2D_CR_START) {
     }
 
@@ -506,7 +556,7 @@ void read_hextile_rect(int x,int y, int width, int height)
 
 
 
-
+//int startlog;
 
 void read_fb_rect(void)
 {
@@ -518,8 +568,12 @@ void read_fb_rect(void)
     height = read_16();
     width = read_16();
     encoding = read_32();
-    //sprintf(text,"New Rect %d %d %d %d %d\r\n",xpos,ypos,height,width,encoding);
-    //log_data(text);
+    /*    if (encoding == 1 || startlog ==1)
+	{
+	    startlog = 1;
+	    sprintf(text,"New Rect %d %d %d %d %d\r\n",xpos,ypos,height,width,encoding);
+	    log_data(text);
+	    }*/
     switch (encoding)
 	{
 	case 0: 
@@ -1031,7 +1085,7 @@ int main(void) {
   thread_t *echoServerThread = 0;
   thread_t *shellServerThread = 0;
   thread_t *shellServerThread2 = 0;
-
+  //  startlog = 0;
   /*
    * System initializations.
    * - HAL initialization, this also initializes the configured device drivers
