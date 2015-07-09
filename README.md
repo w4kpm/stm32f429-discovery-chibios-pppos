@@ -1,3 +1,12 @@
+2015-7-8
+I uploaded a video of the older code here:
+https://www.youtube.com/watch?v=EpdJi0NMHLo
+I plan on uploading something demonstrating the newer code later.
+
+* Copy Block still not working 
+
+* Raw tile not working 
+
 2015-7-6
 update:
 
