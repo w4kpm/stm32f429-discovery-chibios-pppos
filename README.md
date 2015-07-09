@@ -1,3 +1,10 @@
+
+2015-7-9
+
+New video of this in operation -
+
+http://www.youtube.com/watch?v=N5hHIruIP-Y
+
 2015-7-8
 I've got both copy block and raw tile working - I've still got a pause 
 every second or so - and large buffer updates with lots of detail are 
