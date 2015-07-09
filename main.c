@@ -1077,11 +1077,11 @@ int main(void) {
   fill_rect(0x001f,200,200,100,100,0);
   fill_rect(0xf000,100,100,100,100,0);
 
-
-  fill_rect(0xffffff,300,200,100,100,1);
-  fill_rect(0xff0000,400,100,100,100,1);
-  fill_rect(0x00ff00,400,200,100,100,1);
-  fill_rect(0x0000ff,300,100,100,100,1);
+  // emulate what is coming through vnc server
+  fill_rect(0xffffff00,300,200,100,100,1);
+  fill_rect(0xff000000,400,100,100,100,1);
+  fill_rect(0x00ff0000,400,200,100,100,1);
+  fill_rect(0x0000ff00,300,100,100,100,1);
 
 
 
