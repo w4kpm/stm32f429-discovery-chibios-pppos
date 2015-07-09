@@ -1,4 +1,9 @@
 2015-7-8
+I've got both copy block and raw tile working - I've still got a pause 
+every second or so - and large buffer updates with lots of detail are 
+not very nice (starting emacs) - Block copies are working pretty well
+
+2015-7-8
 I uploaded a video of the older code here:
 https://www.youtube.com/watch?v=EpdJi0NMHLo
 I plan on uploading something demonstrating the newer code later.
