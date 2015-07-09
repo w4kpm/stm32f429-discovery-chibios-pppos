@@ -393,6 +393,8 @@ void read_copy_rect(int xpos, int ypos, int width, int height)
 
 void read_raw_rect(int x,int y, int w, int h)
 {
+    // this just converts each incoming byte and 
+    // directly updates the framebuffer.
     int bytecount;
     char text[255];
     uint32_t incoming_pixel;
@@ -565,8 +567,8 @@ void read_fb_rect(void)
     char text[255];
     xpos = read_16();
     ypos = read_16();
-    height = read_16();
     width = read_16();
+    height = read_16();
     encoding = read_32();
     /*    if (encoding == 1 || startlog ==1)
 	{
@@ -577,13 +579,13 @@ void read_fb_rect(void)
     switch (encoding)
 	{
 	case 0: 
-	    read_raw_rect(xpos,ypos,height,width);
+	    read_raw_rect(xpos,ypos,width,height);
 	    break;
 	case 1:
-	    read_copy_rect(xpos,ypos,height,width);
+	    read_copy_rect(xpos,ypos,width,height);
 	    break;
         case 5:
-	    read_hextile_rect(xpos,ypos,height,width);
+	    read_hextile_rect(xpos,ypos,width,height);
 	    break;
 	default:
 	    log_data_num("Got unexpected encoding %d\r\n",encoding);
