@@ -405,7 +405,13 @@ void read_raw_rect(int x,int y, int w, int h)
     for (q = 0; q<w; q++)
 	for(r=0;r<h; r++)
 	    {
-		incoming_pixel = *(uint32_t*)(vncbuffer+((r*w+q)*4));
+	      incoming_pixel = 0;
+	      incoming_pixel = incoming_pixel | *(uint8_t*)(vncbuffer+((r*w+q)*4)+3);
+	      incoming_pixel = incoming_pixel | (*(uint8_t*)(vncbuffer+((r*w+q)*4)+2)) << 8;
+	      incoming_pixel = incoming_pixel | (*(uint8_t*)(vncbuffer+((r*w+q)*4)+1)) << 16;
+	      incoming_pixel = incoming_pixel | (*(uint8_t*)(vncbuffer+((r*w+q)*4)+0)) << 24;
+
+	      //	incoming_pixel = *(uint32_t*)(vncbuffer+((r*w+q)*4));
 		pixel=translate_color(incoming_pixel);
 		*(uint16_t*) (TFT_BUFFER_START + (((y+r)*TFT_BUFFER_WIDTH)+x+q)*TFT_PIXEL_SIZE) = pixel &0xffff;
 	    }
