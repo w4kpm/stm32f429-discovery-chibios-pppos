@@ -133,11 +133,22 @@ u32_t sys_jiffies(void) {
 
 static SerialConfig uartCfg =
 {
+    921600,// bit rate
+    0,
+    0,
+    0,
+};
+
+
+static SerialConfig uartCfg2 =
+{
     460800,// bit rate
     0,
     0,
     0,
 };
+
+
 /*
  * Application entry point.
  */
@@ -1118,7 +1129,7 @@ int main(void) {
 
   chMtxObjectInit(&SD4mtx);
   sdStart(&SD1, &uartCfg);
-  sdStart(&SD4, &uartCfg);
+  sdStart(&SD4, &uartCfg2);
 
   palSetPadMode(GPIOG, 13, PAL_MODE_OUTPUT_PUSHPULL); 
   palSetPadMode(GPIOG, 14, PAL_MODE_OUTPUT_PUSHPULL );
