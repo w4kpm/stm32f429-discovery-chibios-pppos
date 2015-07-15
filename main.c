@@ -33,6 +33,9 @@
 #include <string.h>
 #include "ppp/ppp.h"
 #include "stm32f4xx.h"
+#include "miniz.c"
+
+
 mutex_t SD4mtx;
 //#include "lwipthread.h"
 
@@ -42,12 +45,15 @@ mutex_t SD4mtx;
 #define TFT_BUFFER_HEIGHT 480
 #define TFT_PIXEL_SIZE 2
 
+#define XFER_BUFFER 0xD0300000
+
 
 #define PKT_BUFFER_START 0xD0100000
 #define PKT_BUFFER_LEN   0x00100000
 uint8_t *bufferstart;
 uint8_t *bufferend;
 uint16_t numbytes;
+z_stream infstream;
 
 static uint8_t txbuf[2];
 static uint8_t rxbuf[2];
@@ -55,6 +61,313 @@ static char text[255];
 struct tcp_pcb *gpcb;
 int tcp_connected;
 int tcp_sent_data;
+
+
+
+
+/*
+ * Endpoints to be used for USBD2.
+ */
+#define USBD2_DATA_REQUEST_EP           1
+#define USBD2_DATA_AVAILABLE_EP         1
+#define USBD2_INTERRUPT_REQUEST_EP      2
+
+/*
+ * Serial over USB Driver structure.
+ */
+static SerialUSBDriver SDU2;
+
+/*
+ * USB Device Descriptor.
+ */
+static const uint8_t vcom_device_descriptor_data[18] = {
+  USB_DESC_DEVICE       (0x0110,        /* bcdUSB (1.1).                    */
+                         0x02,          /* bDeviceClass (CDC).              */
+                         0x00,          /* bDeviceSubClass.                 */
+                         0x00,          /* bDeviceProtocol.                 */
+                         0x40,          /* bMaxPacketSize.                  */
+                         0x0483,        /* idVendor (ST).                   */
+                         0x5740,        /* idProduct.                       */
+                         0x0200,        /* bcdDevice.                       */
+                         1,             /* iManufacturer.                   */
+                         2,             /* iProduct.                        */
+                         3,             /* iSerialNumber.                   */
+                         1)             /* bNumConfigurations.              */
+};
+
+/*
+ * Device Descriptor wrapper.
+ */
+static const USBDescriptor vcom_device_descriptor = {
+  sizeof vcom_device_descriptor_data,
+  vcom_device_descriptor_data
+};
+
+/* Configuration Descriptor tree for a CDC.*/
+static const uint8_t vcom_configuration_descriptor_data[67] = {
+  /* Configuration Descriptor.*/
+  USB_DESC_CONFIGURATION(67,            /* wTotalLength.                    */
+                         0x02,          /* bNumInterfaces.                  */
+                         0x01,          /* bConfigurationValue.             */
+                         0,             /* iConfiguration.                  */
+                         0xC0,          /* bmAttributes (self powered).     */
+                         50),           /* bMaxPower (100mA).               */
+  /* Interface Descriptor.*/
+  USB_DESC_INTERFACE    (0x00,          /* bInterfaceNumber.                */
+                         0x00,          /* bAlternateSetting.               */
+                         0x01,          /* bNumEndpoints.                   */
+                         0x02,          /* bInterfaceClass (Communications
+                                           Interface Class, CDC section
+                                           4.2).                            */
+                         0x02,          /* bInterfaceSubClass (Abstract
+                                         Control Model, CDC section 4.3).   */
+                         0x01,          /* bInterfaceProtocol (AT commands,
+                                           CDC section 4.4).                */
+                         0),            /* iInterface.                      */
+  /* Header Functional Descriptor (CDC section 5.2.3).*/
+  USB_DESC_BYTE         (5),            /* bLength.                         */
+  USB_DESC_BYTE         (0x24),         /* bDescriptorType (CS_INTERFACE).  */
+  USB_DESC_BYTE         (0x00),         /* bDescriptorSubtype (Header
+                                           Functional Descriptor.           */
+  USB_DESC_BCD          (0x0110),       /* bcdCDC.                          */
+  /* Call Management Functional Descriptor. */
+  USB_DESC_BYTE         (5),            /* bFunctionLength.                 */
+  USB_DESC_BYTE         (0x24),         /* bDescriptorType (CS_INTERFACE).  */
+  USB_DESC_BYTE         (0x01),         /* bDescriptorSubtype (Call Management
+                                           Functional Descriptor).          */
+  USB_DESC_BYTE         (0x00),         /* bmCapabilities (D0+D1).          */
+  USB_DESC_BYTE         (0x01),         /* bDataInterface.                  */
+  /* ACM Functional Descriptor.*/
+  USB_DESC_BYTE         (4),            /* bFunctionLength.                 */
+  USB_DESC_BYTE         (0x24),         /* bDescriptorType (CS_INTERFACE).  */
+  USB_DESC_BYTE         (0x02),         /* bDescriptorSubtype (Abstract
+                                           Control Management Descriptor).  */
+  USB_DESC_BYTE         (0x02),         /* bmCapabilities.                  */
+  /* Union Functional Descriptor.*/
+  USB_DESC_BYTE         (5),            /* bFunctionLength.                 */
+  USB_DESC_BYTE         (0x24),         /* bDescriptorType (CS_INTERFACE).  */
+  USB_DESC_BYTE         (0x06),         /* bDescriptorSubtype (Union
+                                           Functional Descriptor).          */
+  USB_DESC_BYTE         (0x00),         /* bMasterInterface (Communication
+                                           Class Interface).                */
+  USB_DESC_BYTE         (0x01),         /* bSlaveInterface0 (Data Class
+                                           Interface).                      */
+  /* Endpoint 2 Descriptor.*/
+  USB_DESC_ENDPOINT     (USBD2_INTERRUPT_REQUEST_EP|0x80,
+                         0x03,          /* bmAttributes (Interrupt).        */
+                         0x0008,        /* wMaxPacketSize.                  */
+                         0xFF),         /* bInterval.                       */
+  /* Interface Descriptor.*/
+  USB_DESC_INTERFACE    (0x01,          /* bInterfaceNumber.                */
+                         0x00,          /* bAlternateSetting.               */
+                         0x02,          /* bNumEndpoints.                   */
+                         0x0A,          /* bInterfaceClass (Data Class
+                                           Interface, CDC section 4.5).     */
+                         0x00,          /* bInterfaceSubClass (CDC section
+                                           4.6).                            */
+                         0x00,          /* bInterfaceProtocol (CDC section
+                                           4.7).                            */
+                         0x00),         /* iInterface.                      */
+  /* Endpoint 3 Descriptor.*/
+  USB_DESC_ENDPOINT     (USBD2_DATA_AVAILABLE_EP,       /* bEndpointAddress.*/
+                         0x02,          /* bmAttributes (Bulk).             */
+                         0x0040,        /* wMaxPacketSize.                  */
+                         0x00),         /* bInterval.                       */
+  /* Endpoint 1 Descriptor.*/
+  USB_DESC_ENDPOINT     (USBD2_DATA_REQUEST_EP|0x80,    /* bEndpointAddress.*/
+                         0x02,          /* bmAttributes (Bulk).             */
+                         0x0040,        /* wMaxPacketSize.                  */
+                         0x00)          /* bInterval.                       */
+};
+
+/*
+ * Configuration Descriptor wrapper.
+ */
+static const USBDescriptor vcom_configuration_descriptor = {
+  sizeof vcom_configuration_descriptor_data,
+  vcom_configuration_descriptor_data
+};
+
+/*
+ * U.S. English language identifier.
+ */
+static const uint8_t vcom_string0[] = {
+  USB_DESC_BYTE(4),                     /* bLength.                         */
+  USB_DESC_BYTE(USB_DESCRIPTOR_STRING), /* bDescriptorType.                 */
+  USB_DESC_WORD(0x0409)                 /* wLANGID (U.S. English).          */
+};
+
+/*
+ * Vendor string.
+ */
+static const uint8_t vcom_string1[] = {
+  USB_DESC_BYTE(38),                    /* bLength.                         */
+  USB_DESC_BYTE(USB_DESCRIPTOR_STRING), /* bDescriptorType.                 */
+  'S', 0, 'T', 0, 'M', 0, 'i', 0, 'c', 0, 'r', 0, 'o', 0, 'e', 0,
+  'l', 0, 'e', 0, 'c', 0, 't', 0, 'r', 0, 'o', 0, 'n', 0, 'i', 0,
+  'c', 0, 's', 0
+};
+
+/*
+ * Device Description string.
+ */
+static const uint8_t vcom_string2[] = {
+  USB_DESC_BYTE(56),                    /* bLength.                         */
+  USB_DESC_BYTE(USB_DESCRIPTOR_STRING), /* bDescriptorType.                 */
+  'C', 0, 'h', 0, 'i', 0, 'b', 0, 'i', 0, 'O', 0, 'S', 0, '/', 0,
+  'R', 0, 'T', 0, ' ', 0, 'V', 0, 'i', 0, 'r', 0, 't', 0, 'u', 0,
+  'a', 0, 'l', 0, ' ', 0, 'C', 0, 'O', 0, 'M', 0, ' ', 0, 'P', 0,
+  'o', 0, 'r', 0, 't', 0
+};
+
+/*
+ * Serial Number string.
+ */
+static const uint8_t vcom_string3[] = {
+  USB_DESC_BYTE(8),                     /* bLength.                         */
+  USB_DESC_BYTE(USB_DESCRIPTOR_STRING), /* bDescriptorType.                 */
+  '0' + CH_KERNEL_MAJOR, 0,
+  '0' + CH_KERNEL_MINOR, 0,
+  '0' + CH_KERNEL_PATCH, 0
+};
+
+/*
+ * Strings wrappers array.
+ */
+static const USBDescriptor vcom_strings[] = {
+  {sizeof vcom_string0, vcom_string0},
+  {sizeof vcom_string1, vcom_string1},
+  {sizeof vcom_string2, vcom_string2},
+  {sizeof vcom_string3, vcom_string3}
+};
+
+/*
+ * Handles the GET_DESCRIPTOR callback. All required descriptors must be
+ * handled here.
+ */
+static const USBDescriptor *get_descriptor(USBDriver *usbp,
+                                           uint8_t dtype,
+                                           uint8_t dindex,
+                                           uint16_t lang) {
+
+  (void)usbp;
+  (void)lang;
+  switch (dtype) {
+  case USB_DESCRIPTOR_DEVICE:
+    return &vcom_device_descriptor;
+  case USB_DESCRIPTOR_CONFIGURATION:
+    return &vcom_configuration_descriptor;
+  case USB_DESCRIPTOR_STRING:
+    if (dindex < 4)
+      return &vcom_strings[dindex];
+  }
+  return NULL;
+}
+
+/**
+ * @brief   IN EP1 state.
+ */
+static USBInEndpointState ep1instate;
+
+/**
+ * @brief   OUT EP1 state.
+ */
+static USBOutEndpointState ep1outstate;
+
+/**
+ * @brief   EP1 initialization structure (both IN and OUT).
+ */
+static const USBEndpointConfig ep1config = {
+  USB_EP_MODE_TYPE_BULK,
+  NULL,
+  sduDataTransmitted,
+  sduDataReceived,
+  0x0040,
+  0x0040,
+  &ep1instate,
+  &ep1outstate,
+  2,
+  NULL
+};
+
+/**
+ * @brief   IN EP2 state.
+ */
+static USBInEndpointState ep2instate;
+
+/**
+ * @brief   EP2 initialization structure (IN only).
+ */
+static const USBEndpointConfig ep2config = {
+  USB_EP_MODE_TYPE_INTR,
+  NULL,
+  sduInterruptTransmitted,
+  NULL,
+  0x0010,
+  0x0000,
+  &ep2instate,
+  NULL,
+  1,
+  NULL
+};
+
+/*
+ * Handles the USB driver global events.
+ */
+static void usb_event(USBDriver *usbp, usbevent_t event) {
+
+  switch (event) {
+  case USB_EVENT_RESET:
+    return;
+  case USB_EVENT_ADDRESS:
+    return;
+  case USB_EVENT_CONFIGURED:
+    chSysLockFromISR();
+
+    /* Enables the endpoints specified into the configuration.
+       Note, this callback is invoked from an ISR so I-Class functions
+       must be used.*/
+    usbInitEndpointI(usbp, USBD2_DATA_REQUEST_EP, &ep1config);
+    usbInitEndpointI(usbp, USBD2_INTERRUPT_REQUEST_EP, &ep2config);
+
+    /* Resetting the state of the CDC subsystem.*/
+    sduConfigureHookI(&SDU2);
+
+    chSysUnlockFromISR();
+    return;
+  case USB_EVENT_SUSPEND:
+    return;
+  case USB_EVENT_WAKEUP:
+    return;
+  case USB_EVENT_STALLED:
+    return;
+  }
+  return;
+}
+
+/*
+ * USB driver configuration.
+ */
+static const USBConfig usbcfg = {
+  usb_event,
+  get_descriptor,
+  sduRequestsHook,
+  NULL
+};
+
+/*
+ * Serial over USB driver configuration.
+ */
+static const SerialUSBConfig serusbcfg = {
+  &USBD2,
+  USBD2_DATA_REQUEST_EP,
+  USBD2_DATA_AVAILABLE_EP,
+  USBD2_INTERRUPT_REQUEST_EP
+};
+
+
+
+
 static const SPIConfig std_spicfg1 = {
   NULL,
   GPIOC,                                                        /*port of CS  */
@@ -133,7 +446,8 @@ u32_t sys_jiffies(void) {
 
 static SerialConfig uartCfg =
 {
-    921600,// bit rate
+  //921600,// bit rate
+    460800,// bit rate
     0,
     0,
     0,
@@ -191,19 +505,21 @@ static const ShellCommand shell_commands[] = {
 	{NULL, NULL}
 };
 
-char vncbuffer[2048]; // shouldn't ever get more than 1024
+uint8_t  *vncbuffer;
 int vncsocket;
 
 void log_data(char* text)
 {
 
     chprintf((BaseSequentialStream*)&SD4,text);
+    //chprintf((BaseSequentialStream*)&SDU2,text);
 }
 
 void log_data_num(char* text,int data)
 {
 
     chprintf((BaseSequentialStream*)&SD4,text,data);
+    //chprintf((BaseSequentialStream*)&SDU2,text,data);
 }
 
 
@@ -220,7 +536,7 @@ void ensure_bytes(uint16_t numb)
 
     readbytes =0;
     neededbytes = numb;
-    buffpos = &vncbuffer;
+    buffpos = vncbuffer;
     while (readbytes < numb)
 	{
 	    //chThdSleepMilliseconds(10);
@@ -280,10 +596,25 @@ uint16_t read_16(void)
     uint16_t data;
     int numbytes;
     ensure_bytes(2);
-    data = data | vncbuffer[1];
+    data = data = vncbuffer[1];
     data = data | vncbuffer[0] << 8;
     return data;
 }
+
+
+
+uint16_t read_pixel(void)
+{    
+    // Endianess differs - we need to swap the bytes
+
+
+    uint16_t data;
+    int numbytes;
+    ensure_bytes(2);
+    data = *(uint16_t *) vncbuffer;
+    return data;
+}
+
 
 
 uint32_t read_32(void)
@@ -335,17 +666,19 @@ void read_all_data(char* str,uint16_t len)
        there may be another packet waiting */
     int x;
     int numread;
+    
 
     if (numbytes < len)
 	{
-	    chprintf((BaseSequentialStream*)&SD4,"only %d bytes - will block \r\n",numbytes);
+	  log_data_num("only %d bytes - will block \r\n",numbytes);
 	    return;
 	}
-    numread=rx(&vncbuffer,len);
-    chprintf((BaseSequentialStream*)&SD4,"%s Data Dump:\r\n    ",str);
+    numread=rx(vncbuffer,len);
+    log_data_num("%s Data Dump:\r\n    ",str);
     for (x=0;x<numread;x++)
-	chprintf((BaseSequentialStream*)&SD4,"0x%X ",vncbuffer[x]);
-    chprintf((BaseSequentialStream*)&SD4,"\r\n");
+      log_data_num("0x%X ",vncbuffer[x]);
+
+    log_data("\r\n");
 
 
 }
@@ -355,7 +688,6 @@ void read_all_data(char* str,uint16_t len)
 void read_copy_rect(int xpos, int ypos, int width, int height)
 {
     uint16_t sourcex,sourcey;
-    char text[255];
     sourcex = read_16();
     sourcey = read_16();
     //    sprintf(text,"copy-rect. source %d,%d dest: %d,%d size:%d,%d\r\n",sourcex,sourcey,xpos,ypos,height,width);
@@ -407,27 +739,56 @@ void read_raw_rect(int x,int y, int w, int h)
     // this just converts each incoming byte and 
     // directly updates the framebuffer.
     int bytecount;
-    char text[255];
-    uint32_t incoming_pixel;
+
+    //    uint32_t incoming_pixel;
     uint16_t pixel;
     int q,r;
     //log_data_num("Raw Rect: reading %d bytes\r\n",(w * h * 4));
-    ensure_bytes((w * h * 4));
+    ensure_bytes((w * h * 2));
     for (q = 0; q<w; q++)
 	for(r=0;r<h; r++)
 	    {
-	      incoming_pixel = 0;
-	      incoming_pixel = incoming_pixel | *(uint8_t*)(vncbuffer+((r*w+q)*4)+3);
-	      incoming_pixel = incoming_pixel | (*(uint8_t*)(vncbuffer+((r*w+q)*4)+2)) << 8;
-	      incoming_pixel = incoming_pixel | (*(uint8_t*)(vncbuffer+((r*w+q)*4)+1)) << 16;
-	      incoming_pixel = incoming_pixel | (*(uint8_t*)(vncbuffer+((r*w+q)*4)+0)) << 24;
-
-	      //	incoming_pixel = *(uint32_t*)(vncbuffer+((r*w+q)*4));
-		pixel=translate_color(incoming_pixel);
-		*(uint16_t*) (TFT_BUFFER_START + (((y+r)*TFT_BUFFER_WIDTH)+x+q)*TFT_PIXEL_SIZE) = pixel &0xffff;
+	      
+	      pixel = *(uint16_t*)(vncbuffer+((r*w+q)*2));
+	      //pixel=translate_color(incoming_pixel);
+	      *(uint16_t*) (TFT_BUFFER_START + (((y+r)*TFT_BUFFER_WIDTH)+x+q)*TFT_PIXEL_SIZE) = pixel &0xffff;
 	    }
 	
 }
+
+
+
+void read_zlib_rect(int x,int y, int w, int h)
+{
+    // this just converts each incoming byte and 
+    // directly updates the framebuffer.
+    int bytecount;
+
+    //    uint32_t incoming_pixel;
+    int16_t pixel;
+    uint32_t pixelcount;
+    uLong uncompress_size;
+    int q,r;
+    
+    pixelcount = read_32();
+    sprintf(text,"zlib Rect: (%d,%d,%d,%d) reading %d bytes\r\n",x,y,w,h,pixelcount);
+    log_data(text);
+    ensure_bytes(pixelcount);
+
+    infstream.avail_in = pixelcount; // size of input
+    infstream.next_in = vncbuffer; // input char array
+    infstream.avail_out = w*h*TFT_PIXEL_SIZE;
+    infstream.next_out = TFT_BUFFER_START + ((y*TFT_BUFFER_WIDTH)+x)*TFT_PIXEL_SIZE;
+
+
+    log_data("got bytes\r\n");
+    pixel = inflate(&infstream,Z_NO_FLUSH);
+    log_data_num("after uncompress %d\r\n",pixel);
+	
+}
+
+
+
 
 
 uint8_t clipit (int currentpos, int maxpos)
@@ -477,14 +838,14 @@ void process_colored_rects(int rectCount, int startX, int startY)
     for (count = 0;count < rectCount; count++)
 	{
 	    //	    log_data_num("colored Rect #%d\r\n",count);
-	    currentcolor = read_32();
+	    currentcolor = read_pixel();
 	    xy = read_8();
 	    wh = read_8();
 	    y = xy & 0xf;
 	    x = (xy & 0xf0) >> 4;
 	    h = wh & 0xf;
 	    w = (wh & 0xf0) >> 4;
-	    fill_rect(currentcolor,startX + x,startY+y,w+1,h+1,1);
+	    fill_rect(currentcolor,startX + x,startY+y,w+1,h+1,0);
 	}
 }
 	    
@@ -504,7 +865,7 @@ void process_foreground_rects(uint32_t fgcolor,int rectCount, int startX, int st
 	    x = (xy & 0xf0) >> 4;
 	    h = wh & 0xf;
 	    w = (wh & 0xf0) >> 4;
-	    fill_rect(fgcolor,startX + x,startY+y,w+1,h+1,1);
+	    fill_rect(fgcolor,startX + x,startY+y,w+1,h+1,0);
 	}
 }
 	    
@@ -514,7 +875,7 @@ void process_foreground_rects(uint32_t fgcolor,int rectCount, int startX, int st
 void read_hextile_rect(int x,int y, int width, int height)
 {
     int y2,x2;
-    char text[255];
+
     uint8_t subencoding,raw,background,foreground,anysubrects,coloredrects;
     int newwidth,newheight;
     int subrect_count;
@@ -544,12 +905,12 @@ void read_hextile_rect(int x,int y, int width, int height)
 			if (background)
 			    {
 				
-				hextile_bg_color = read_32();
+				hextile_bg_color = read_pixel();
 				//log_data_num("new bg color %X\r\n",hextile_bg_color);			    
 			    }
 			if (foreground)
 			    {
-				hextile_fg_color = read_32();
+				hextile_fg_color = read_pixel();
 				//log_data_num("new fg color %X\r\n",hextile_fg_color);			    }
 			    }
 			if (anysubrects)
@@ -558,7 +919,7 @@ void read_hextile_rect(int x,int y, int width, int height)
 				//log_data_num("subrec Count %d\r\n",subrect_count);
 			    }
 			// fill bg rect here 
-		        fill_rect(hextile_bg_color,x2*16+x,y2*16+y,newwidth,newheight,1);
+		        fill_rect(hextile_bg_color,x2*16+x,y2*16+y,newwidth,newheight,0);
 			//  I think these are mutually exclusive.
 			if (coloredrects)
 			    process_colored_rects(subrect_count,x2*16+x,y2*16+y);
@@ -581,18 +942,17 @@ void read_fb_rect(void)
 {
     uint16_t xpos,ypos,height,width;
     uint32_t encoding;
-    char text[255];
+
     xpos = read_16();
     ypos = read_16();
     width = read_16();
     height = read_16();
     encoding = read_32();
-    /*    if (encoding == 1 || startlog ==1)
+    if (encoding == 6)
 	{
-	    startlog = 1;
 	    sprintf(text,"New Rect %d %d %d %d %d\r\n",xpos,ypos,height,width,encoding);
 	    log_data(text);
-	    }*/
+	    }
     switch (encoding)
 	{
 	case 0: 
@@ -604,6 +964,10 @@ void read_fb_rect(void)
         case 5:
 	    read_hextile_rect(xpos,ypos,width,height);
 	    break;
+        case 6:
+	    read_zlib_rect(xpos,ypos,width,height);
+	    break;
+
 	default:
 	    log_data_num("Got unexpected encoding %d\r\n",encoding);
 	}
@@ -656,7 +1020,7 @@ void read_pixel_format_data(void)
     log_data_num("red-shift: %d\r\n",read_8()); 
     log_data_num("green-shift: %d\r\n",read_8()); 
     log_data_num("blue-shift: %d\r\n",read_8());
-    rx(&vncbuffer,3); // per the protocol, there is 
+    rx(vncbuffer,3); // per the protocol, there is 
                                          // three bytes of padding
     strLength= read_32();
     ensure_bytes(strLength);
@@ -664,6 +1028,28 @@ void read_pixel_format_data(void)
     log_data("name:\r\n     ");
     log_data(vncbuffer);
     log_data("\r\n");
+
+}
+
+
+
+void set_pixel_format_data(void)
+{
+  int len;
+  vncbuffer[0] = 0;
+  vncbuffer[4] = 16; // 16 bpp
+  vncbuffer[5] = 16; // 16 bit depth
+  vncbuffer[6] = 0; //little endian
+  vncbuffer[7] = 1; // true color
+  set_16(vncbuffer+8,0x1f); // set red to be 5 bits
+  set_16(vncbuffer+10,0x3f); // set g to be 6 bits
+  set_16(vncbuffer+12,0x1f); // set blue to be 5 bits
+  vncbuffer[14] = 11; // shift red 11
+  vncbuffer[15] = 5;  // shift green 5
+  vncbuffer[16] = 0;  // shift blue 0
+  len = send(vncbuffer,20);
+  if (len != 20)
+	log_data("pixel information Incorrect length\r\n");
 
 }
 
@@ -681,6 +1067,7 @@ void framebuffer_request(uint16_t x,
     uint32_t *longptr;
 
     //    read_all_data("Begin FB Request");
+    
     vncbuffer[0] = 3; // message type
     vncbuffer[1] = incremental;
     set_16(vncbuffer+2,x);
@@ -688,7 +1075,7 @@ void framebuffer_request(uint16_t x,
     set_16(vncbuffer+6,width);
     set_16(vncbuffer+8,height);
 
-    len = send(&vncbuffer,10);
+    len = send(vncbuffer,10);
     if (len != 10)
 	log_data("framebuffer Incorrect length\r\n");
     process_frame_response();
@@ -702,10 +1089,11 @@ void set_encodings()
     
     vncbuffer[0] = 2; // message
     vncbuffer[1] = 0; // padding
-    set_16(vncbuffer+2,3); // we're using 3 encodings
+    set_16(vncbuffer+2,4); // we're using 4 encodings
     set_32(vncbuffer+4,5); // hextile
-    set_32(vncbuffer+8,1); // copyrect
-    set_32(vncbuffer+12,0); // raw
+    set_32(vncbuffer+8,6); // zlib
+    set_32(vncbuffer+12,1); // copyrect
+    set_32(vncbuffer+16,0); // raw
 
     // - only to print out raw bytes and make sure things were 
     // in correct order.
@@ -714,8 +1102,8 @@ void set_encodings()
     //for (x=0;x<16;x++)
     //	chprintf((BaseSequentialStream*)&SD4,"0x%X ",vncbuffer[x]);
     //chprintf((BaseSequentialStream*)&SD4,"\r\n");
-    x = send(&vncbuffer,16);
-    if (x != 16)
+    x = send(vncbuffer,20);
+    if (x != 20)
 	log_data("set Encodings Incorrect length\r\n");
 	
 
@@ -737,11 +1125,11 @@ int send(uint8_t *buffer,int len)
 	err=0;
 	//chprintf((BaseSequentialStream*)&SD4,"tcp_write= OK\r\n");
     else
-	chprintf((BaseSequentialStream*)&SD4,"tcp_write= %d\r\n",err);
+      log_data_num("tcp_write= %d\r\n",err);
     while (tcp_sent_data ==0)
 	{
 	    //	    chprintf((BaseSequentialStream*)&SD4,"o");
-	    chThdSleepMilliseconds(1);
+	    chThdSleepMilliseconds(10);
 
 	    
 	}
@@ -753,12 +1141,14 @@ int rx(uint8_t* buffer,int len)
     int retval;
     retval = len;
     // block forever
+    
     while (numbytes < len)
 	{
-	    //chprintf((BaseSequentialStream*)&SD4,"x");
+	  log_data("x");
 
-	    chThdSleepMilliseconds(1);
+	    chThdSleepMilliseconds(10);
 	}
+
     memcpy(buffer,bufferstart,len);
     bufferstart += len;
     numbytes -= len;
@@ -767,6 +1157,7 @@ int rx(uint8_t* buffer,int len)
 	    bufferstart = bufferend = PKT_BUFFER_START;
 	}
     return retval;
+    
 }
 
 
@@ -780,6 +1171,7 @@ int connect_vnc(void){
     send(tcpbuff,1); // share flag - allow sharing
     read_all_data("Security Code",4);    
     read_pixel_format_data();    
+    set_pixel_format_data();
     set_encodings();
 
 
@@ -810,15 +1202,17 @@ err_t tcp_recv_callback(void* arg, struct tcp_pcb *tpcb,struct pbuf *p,err_t err
 
  err_t tcp_connect_callback(void* arg, struct tcp_pcb *tpcb,err_t err)
  {
-     chprintf((BaseSequentialStream*)&SD4,"got to callback \r\n");
+   log_data("got to callback \r\n");
      if (err == ERR_OK)
 	 {
 	     tcp_connected = 1;
-	     chprintf((BaseSequentialStream*)&SD4,"Connected!\r\n");
+	     log_data("Connected!\r\n");
+
 	 }
      else
 	 {
-	     chprintf((BaseSequentialStream*)&SD4,"connection error: %x\r\n",err);
+	   log_data_num("connection error: %x\r\n",err);
+
 	 }
      return ERR_OK;
 
@@ -836,7 +1230,7 @@ err_t tcp_sent_callback(void *arg,
 
 
 
-static THD_WORKING_AREA(waVncThread, 2048 );
+static THD_WORKING_AREA(waVncThread, 4096 );
 static THD_FUNCTION(VncThread, arg) {
 
 	int ret;
@@ -860,7 +1254,8 @@ static THD_FUNCTION(VncThread, arg) {
 	//	socklen_t fromlen;
 
 	chRegSetThreadName("VncThread");
-	chprintf((BaseSequentialStream*)&SD4,"VNC Client Starting \r\n");
+	log_data("VNC Client Starting \r\n");
+
 
 	gpcb = tcp_new();	
 	tcp_sent(gpcb,tcp_sent_callback);
@@ -868,43 +1263,32 @@ static THD_FUNCTION(VncThread, arg) {
 	error = tcp_connect(gpcb,&dest,SOCK_TARGET_PORT,tcp_connect_callback);
 
 	if (error != ERR_OK)
-	    chprintf((BaseSequentialStream*)&SD4,"error colling connect %d \r\n",error);
+	  log_data_num("error colling connect %d \r\n",error);
 	else
-	    chprintf((BaseSequentialStream*)&SD4,"tcp_connect OK \r\n");
+	  log_data("tcp_connect OK \r\n");
+
 	while (tcp_connected == 0)
 	    {
-		chprintf((BaseSequentialStream*)&SD4,"-");
+	      log_data("-");
+
 		chThdSleepMilliseconds(100);
+		if (chThdShouldTerminate())
+		  return TRUE;
 	    }
 	    
 
-	//	vncsocket = lwip_socket(AF_INET,  SOCK_STREAM, IPPROTO_TCP);
-	//if (vncsocket == -1) {
-	//    chprintf((BaseSequentialStream*)&SD4,"Closing A - no socket \r\n");
-
-	//		return MSG_RESET;
-	//	}
-
-	//	memset(&sa, 0, sizeof(sa));
-//	sa.sin_family = AF_INET;
-//	sa.sin_port = PP_HTONS(SOCK_TARGET_PORT);
-//	sa.sin_addr.s_addr = inet_addr(SOCK_TARGET_HOST);
-//	fromlen = sizeof(sa);
-//	ret = lwip_connect(vncsocket, (struct sockaddr*)&sa, sizeof(sa));
-//	chprintf((BaseSequentialStream*)&SD4,"Returned '%d' \r\n",ret);
 	connect_vnc();
-	//chThdSleepMilliseconds(5000);
-		framebuffer_request(0,0,800,480,0);
-	while (TRUE)
+	framebuffer_request(0,0,800,480,0);
+	while (!chThdShouldTerminate())
 	    {
-//		log_data("****************************************\r\n");
+	      //log_data("****************************************\r\n");
 //		//read_all_data("getting ready to read");
 		//chprintf((BaseSequentialStream*)&SD4,".");
 		//chThdSleepMilliseconds(1000);
 		framebuffer_request(0,0,800,480,1);
 
 	    }
-	
+	return TRUE;
 }
 
 /*
@@ -1066,7 +1450,7 @@ static THD_FUNCTION(ShellServerThread2, arg) {
 	shell_cfg.sc_channel = (BaseSequentialStream*) &SD4;
 	shell_cfg.sc_commands = shell_commands;
 
-	shelltp = shellCreate(&shell_cfg, SHELL_WA_SIZE, NORMALPRIO+2);
+	shelltp = shellCreate(&shell_cfg, SHELL_WA_SIZE, NORMALPRIO);
 		chThdWait(shelltp);
 
 
@@ -1116,6 +1500,12 @@ int main(void) {
   halInit();
   chSysInit();
 
+
+  infstream.zalloc = Z_NULL;
+  infstream.zfree = Z_NULL;
+  infstream.opaque = Z_NULL;
+  inflateInit(&infstream);
+
   /*
    * SPI1 I/O pins setup.
    */
@@ -1127,18 +1517,39 @@ int main(void) {
       RCC_AHB1ENR_GPIODEN | RCC_AHB1ENR_GPIOEEN | RCC_AHB1ENR_GPIOFEN |
       RCC_AHB1ENR_GPIOGEN;
 
-  chMtxObjectInit(&SD4mtx);
   sdStart(&SD1, &uartCfg);
   sdStart(&SD4, &uartCfg2);
 
-  palSetPadMode(GPIOG, 13, PAL_MODE_OUTPUT_PUSHPULL); 
-  palSetPadMode(GPIOG, 14, PAL_MODE_OUTPUT_PUSHPULL );
-  chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO + 1, Thread1, NULL);
-  RCC->AHB1ENR |= RCC_AHB1ENR_DMA2DEN;
 
   SDRAM_Init();
-  
   TFTLCD_Init();
+
+
+  chMtxObjectInit(&SD4mtx);
+  sduObjectInit(&SDU2);
+  sduStart(&SDU2, &serusbcfg);
+
+  /*
+   * Activates the USB driver and then the USB bus pull-up on D+.
+   * Note, a delay is inserted in order to not have to disconnect the cable
+   * after a reset.
+   */
+  usbDisconnectBus(serusbcfg.usbp);
+  chThdSleepMilliseconds(1500);
+  usbStart(serusbcfg.usbp, &usbcfg);
+  usbConnectBus(serusbcfg.usbp);
+
+
+
+
+  palSetPadMode(GPIOG, 13, PAL_MODE_OUTPUT_PUSHPULL); 
+  palSetPadMode(GPIOG, 14, PAL_MODE_OUTPUT_PUSHPULL );
+  chThdCreateStatic(waThread1, sizeof(waThread1), NORMALPRIO, Thread1, NULL);
+  RCC->AHB1ENR |= RCC_AHB1ENR_DMA2DEN;
+
+
+  vncbuffer = XFER_BUFFER;
+
   //  chThdSleepMilliseconds(1000);
 
   //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
@@ -1194,15 +1605,16 @@ int main(void) {
 
 	while (TRUE) {
 		volatile int connected = 0;
-
-		int pd = pppOverSerialOpen(&SD1, ppp_linkstatus_callback,
+		log_data("before ppp open\r\n");
+		int pd = pppOverSerialOpen((BaseSequentialStream*)&SD1, ppp_linkstatus_callback,
 				(int*) &connected);
 
 		if (pd < 0) {
+		  log_data_num("pd eror %d\r\n",pd);
 			chThdSleep(MS2ST(100));
 			continue;
 		}
-		chprintf((BaseSequentialStream*)&SD4,"After ppp open\r\n");
+		log_data("After ppp open\r\n");
 		chThdSleepMilliseconds(100);
 
 
@@ -1210,34 +1622,36 @@ int main(void) {
 		int timeout = 0;
 
 		while (connected < 1) {
-			chThdSleep(MS2ST(500));
-			if(timeout++ > 10) {  // If we waited too long restart connection
-			    chprintf((BaseSequentialStream*)&SD4,"Close Connection - too long\r\n");
-			    chThdSleepMilliseconds(100);
-
-				pppClose(pd);
-				break;
-			}
+		  log_data("Connection Wait\r\n");
+		  chThdSleep(MS2ST(500));
+		  if(timeout++ > 10) {  // If we waited too long restart connection
+		    log_data("Close Connection - too long\r\n");
+		    chThdSleepMilliseconds(100);
+		    pppClose(pd);
+		    log_data("After Close Connection - too long\r\n");
+		    break;
+		  }
 			
 		}
-		chprintf((BaseSequentialStream*)&SD4,"entering connection \r\n");
+		log_data_num("entering check stable connection %d\r\n",connected);
 
 		// Make sure connection is stable
 		while (connected < 5) {
 			chThdSleep(MS2ST(100));
-			printf("Connected\r\n");
+			log_data("connected\r\n");
 			if (connected == 0) { // reset by pppThread while waiting for stable connection
-			    chprintf((BaseSequentialStream*)&SD4,"Close Connection - not stable\r\n");
-			    chThdSleepMilliseconds(100);
-
-				pppClose(pd);
-				break;
+			  log_data("Close Connection - not stable\r\n");
+			  chThdSleepMilliseconds(100);
+			    
+			  pppClose(pd);
+			  break;
 			}
 			connected++;
 		}
 
+		log_data_num("After check connection stable %d\r\n",connected);
 		// Run server threads
-
+	
 		echoServerThread = chThdCreateStatic(waVncThread,
 						     sizeof(waVncThread), NORMALPRIO + 2, VncThread, NULL);
 
@@ -1250,14 +1664,17 @@ int main(void) {
 		/*		shellServerThread2 = chThdCreateStatic(waShellServerThread2,
 				sizeof(waShellServerThread2), NORMALPRIO + 1, ShellServerThread2,
 				NULL);*/
-
+		chThdSleep(MS2ST(100));
 		while (connected > 0) {
 			chThdSleep(MS2ST(200));
 		}
 
 		// Tear down threads
+		log_data("Terminate Thread\r\n");
 		chThdTerminate(echoServerThread);
+		log_data("Wait Thread\r\n");
 		chThdWait(echoServerThread);
+		log_data("should Loop\r\n");
 		//		chThdTerminate(shellServerThread);
 		//chThdWait(shellServerThread);
 	}
