@@ -1,3 +1,26 @@
+# stm32f429-discovery-chibios-pppos
+
+This project should be considered dead - I leave notes here for anyone interested (probably only me :-)
+
+It began as an exploration of PPPoS - it morphed into an embedded vnc client.
+
+It is being abandoned because I can't get things to go fast enough over serial to really work well for the application I have.
+
+I tried to use USB-CDC to get the speed up, but I never could get it to fully connect with pppd.
+
+The code does work for a while, but then hangs up at some point. I suspect a buffer overflow.
+
+I am having troubles with an invalid pbuf - it runs for a while and locks up. I think this may be to the fact that I added USB-CDC in an attept to get things going faster. It seemed to run pretty well most of the time before that, but it also seemed to be sensitive to delays that I had sprinkled in.
+
+
+
+
+
+
+
+
+
+------------------------------------
 
 2015-7-9
 
@@ -40,7 +63,7 @@ update:
 
 
 
-# stm32f429-discovery-chibios-pppos
+
 just a dump of a sample project that connects to pppd - largely based on the one that wizhippo did here on github
 
 The difference is that you should be able to use this with very little changes from a fresh checkout of Chibios
