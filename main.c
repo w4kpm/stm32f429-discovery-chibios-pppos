@@ -14,12 +14,6 @@
     limitations under the License.
 */
 
-
-//#include "lwip/sockets.h"
-#include "lwip/tcpip.h"
-
-//#include "socketstreams.h"
-
 #include "ch.h"
 #include "hal.h"
 #include "stdio.h"
@@ -29,12 +23,13 @@
 #include "shell.h"
 #include "sysinfo.h"
 #include "sdram.h"
-//#include "lwip/sockets.h"
+
+#include "lwip/tcpip.h"
 #include <string.h>
 #include "ppp/ppp.h"
 #include "stm32f4xx.h"
 #include "miniz.c"
-
+#include "vnc-logo.h"
 
 mutex_t SD4mtx;
 //#include "lwipthread.h"
@@ -64,7 +59,6 @@ int tcp_sent_data;
 
 
 
-
 /*
  * Endpoints to be used for USBD2.
  */
@@ -75,6 +69,7 @@ int tcp_sent_data;
 /*
  * Serial over USB Driver structure.
  */
+
 static SerialUSBDriver SDU2;
 
 /*
@@ -368,6 +363,8 @@ static const SerialUSBConfig serusbcfg = {
 
 
 
+
+
 static const SPIConfig std_spicfg1 = {
   NULL,
   GPIOC,                                                        /*port of CS  */
@@ -446,8 +443,8 @@ u32_t sys_jiffies(void) {
 
 static SerialConfig uartCfg =
 {
-  //921600,// bit rate
     460800,// bit rate
+    //460800,// bit rate
     0,
     0,
     0,
@@ -512,14 +509,14 @@ void log_data(char* text)
 {
 
     chprintf((BaseSequentialStream*)&SD4,text);
-    //chprintf((BaseSequentialStream*)&SDU2,text);
+    chprintf((BaseSequentialStream*)&SDU2,text);
 }
 
 void log_data_num(char* text,int data)
 {
 
     chprintf((BaseSequentialStream*)&SD4,text,data);
-    //chprintf((BaseSequentialStream*)&SDU2,text,data);
+    chprintf((BaseSequentialStream*)&SDU2,text,data);
 }
 
 
@@ -760,6 +757,20 @@ void read_raw_rect(int x,int y, int w, int h)
 
 void read_zlib_rect(int x,int y, int w, int h)
 {
+    // WARNING - this doesn't really work right -
+    // in the case that your framebuffer is 800 bytes and 
+    // you are just updating 600 bytes, it doesn't skip the stuff that isn't
+    // updated resulting in a skewed image. 
+
+    // to work right, it needs to do something like what the raw rect 
+    // above does. If it were re-written a bit the raw code above could work
+    // for both 
+
+    // Oh - and the vnc logo at the start will probably goof up the
+    // zlib stream, so it probably needs to be re-started prior to 
+    // connecting to vnc
+
+    
     // this just converts each incoming byte and 
     // directly updates the framebuffer.
     int bytecount;
@@ -1211,7 +1222,7 @@ err_t tcp_recv_callback(void* arg, struct tcp_pcb *tpcb,struct pbuf *p,err_t err
 	 }
      else
 	 {
-	   log_data_num("connection error: %x\r\n",err);
+	   log_data_num("connection error: %d\r\n",err);
 
 	 }
      return ERR_OK;
@@ -1272,14 +1283,14 @@ static THD_FUNCTION(VncThread, arg) {
 	      log_data("-");
 
 		chThdSleepMilliseconds(100);
-		if (chThdShouldTerminate())
+		if (chThdShouldTerminateX())
 		  return TRUE;
 	    }
 	    
 
 	connect_vnc();
 	framebuffer_request(0,0,800,480,0);
-	while (!chThdShouldTerminate())
+	while (!chThdShouldTerminateX())
 	    {
 	      //log_data("****************************************\r\n");
 //		//read_all_data("getting ready to read");
@@ -1525,6 +1536,29 @@ int main(void) {
   TFTLCD_Init();
 
 
+
+
+
+  //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
+  //  *(uint16_t *)i = 0x0700;
+
+  //fill_rect(0x0000,0,0,800,480,0);
+
+  //fill_rect(0xffff,100,200,100,100,0);
+  //fill_rect(0x0700,200,100,100,100,0);
+  //fill_rect(0x001f,200,200,100,100,0);
+  //fill_rect(0xf000,100,100,100,100,0);
+
+
+
+  infstream.avail_in = vnclogo_length; // size of input
+  infstream.next_in = &vnclogo; // input char array
+  infstream.avail_out = 800*480*TFT_PIXEL_SIZE;
+  infstream.next_out = TFT_BUFFER_START;
+  inflate(&infstream,Z_NO_FLUSH);
+
+
+
   chMtxObjectInit(&SD4mtx);
   sduObjectInit(&SDU2);
   sduStart(&SDU2, &serusbcfg);
@@ -1550,26 +1584,7 @@ int main(void) {
 
   vncbuffer = XFER_BUFFER;
 
-  //  chThdSleepMilliseconds(1000);
-
-  //for(i = 0xD0000000; i < 0xD0000000 + 0xBB800; i += 2)
-  //  *(uint16_t *)i = 0x0700;
-  fill_rect(0x0000,0,0,800,480,0);
-
-  fill_rect(0xffff,100,200,100,100,0);
-  fill_rect(0x0700,200,100,100,100,0);
-  fill_rect(0x001f,200,200,100,100,0);
-  fill_rect(0xf000,100,100,100,100,0);
-
-  // emulate what is coming through vnc server
-  fill_rect(0xffffff00,300,200,100,100,1);
-  fill_rect(0xff000000,400,100,100,100,1);
-  fill_rect(0x00ff0000,400,200,100,100,1);
-  fill_rect(0x0000ff00,300,100,100,100,1);
-
-
-
-
+ 
 
   printf("test from printf \r\n");
   chprintf((BaseSequentialStream*)&SD4,"After start thread\r\n");
@@ -1606,8 +1621,11 @@ int main(void) {
 	while (TRUE) {
 		volatile int connected = 0;
 		log_data("before ppp open\r\n");
+		//check on deallocating pbuf 
+		//check to see if moving buffers works - check mempools
+		//check to see if it happens afte two cycles if we use 10 as the timeout or 100
 		int pd = pppOverSerialOpen((BaseSequentialStream*)&SD1, ppp_linkstatus_callback,
-				(int*) &connected);
+					   (int*) &connected);
 
 		if (pd < 0) {
 		  log_data_num("pd eror %d\r\n",pd);
@@ -1624,7 +1642,7 @@ int main(void) {
 		while (connected < 1) {
 		  log_data("Connection Wait\r\n");
 		  chThdSleep(MS2ST(500));
-		  if(timeout++ > 10) {  // If we waited too long restart connection
+		  if(timeout++ > 5) {  // If we waited too long restart connection
 		    log_data("Close Connection - too long\r\n");
 		    chThdSleepMilliseconds(100);
 		    pppClose(pd);
